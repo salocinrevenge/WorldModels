@@ -27,6 +27,7 @@ class Robo():
 
         self.tipos_sensores = ["visao", "tato"]
         self.sensores_ativos = [True, True]
+        self.tato = {"N": 0, "S": 0, "E": 0, "W": 0}
 
     def controles(self):
         match self.tipos_controle[self.controle_atual]:
@@ -107,12 +108,12 @@ class Robo():
         self.vel.x += self.acc.x 
         self.vel.y += self.acc.y
         self.pos_alvo.x = self.pos.x + self.vel.x
-        if self.world.test_robot_colision_with_terrain(self, self.pos_alvo): # primeiro o x
+        if self.world.test_robot_colision_with_terrain(self.raio, self.pos_alvo)[0]: # primeiro o x
             self.pos_alvo.x = self.pos.x
         else:
             self.pos.x = self.pos_alvo.x
         self.pos_alvo.y = self.pos.y + self.vel.y
-        if self.world.test_robot_colision_with_terrain(self, self.pos_alvo): # depois o y, assim o robô pode deslizar nas paredes
+        if self.world.test_robot_colision_with_terrain(self.raio, self.pos_alvo)[0]: # depois o y, assim o robô pode deslizar nas paredes
             self.pos_alvo.y = self.pos.y
         else:
             self.pos.y = self.pos_alvo.y
@@ -137,6 +138,13 @@ class Robo():
     def update(self, dt:float) -> None:
         self.controles()
         self.phisics(dt)
+        if self.sensores_ativos[self.tipos_sensores.index("tato")]:
+            self.sensor_tato()
+
+    def sensor_tato(self):
+        # Detecta para cada 
+        self.tato = self.world.test_robot_colision_with_terrain(self.raio_tato, self.pos_alvo)[1]
+        print("Sensor de tato:", self.tato)
         
 
     def render(self):

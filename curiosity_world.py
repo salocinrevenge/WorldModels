@@ -26,17 +26,36 @@ class Curiosity_world():
         self.render_terreno()
         self.agente.render()
 
-    def test_robot_colision_with_terrain(self, robo, pos_alvo):
+    def test_robot_colision_with_terrain(self, raio, pos_alvo):
         # Testa se a posição alvo do robô colide com o terreno, retornando True se não colidir e False se colidir
         # Para isso, vamos verificar os quatro cantos do robô, considerando seu raio, para ver se algum deles colide com um obstáculo
-        for i in range(-1, 2, 2):
-            for j in range(-1, 2, 2):
-                x = int((pos_alvo.x + i * robo.raio) // self.escala)
-                y = int((pos_alvo.y + j * robo.raio) // self.escala)
+        colisions = {"N": 0, "S": 0, "E": 0, "W": 0}
+        colidiu = False
+        ordem = ["E", "N", "S", "W"]
+        idx = 0
+        for i in range(-1, 2, 1):
+            for j in range(-1, 2, 1):
+                if abs(i) == abs(j):
+                    continue
+                x = int((pos_alvo.x + i * raio) // self.escala)
+                y = int((pos_alvo.y + j * raio) // self.escala)
                 if self.terreno[y][x] == "#":
-                    return True
-
-        return False
+                    # salva quanto cada sensor foi penetrado no obstáculo
+                    # Computa com base no lado a ser penetrado. Se é esqueda, é o quanto o x do robô ultrapassa o limite direito do obstáculo, se é direita, é o quanto o x do robô ultrapassa o limite esquerdo do obstáculo, se é cima, é o quanto o y do robô ultrapassa o limite inferior do obstáculo, se é baixo, é o quanto o y do robô ultrapassa o limite superior do obstáculo
+                    penetracao = 0
+                    match ordem[idx]:
+                        case "E":
+                            penetracao = raio - (pos_alvo.x - (x * self.escala + self.escala))
+                        case "W":
+                            penetracao = raio - (x * self.escala - pos_alvo.x)
+                        case "N":
+                            penetracao = raio - (pos_alvo.y - (y * self.escala + self.escala))
+                        case "S":
+                            penetracao = raio - (y * self.escala - pos_alvo.y)
+                    colisions[ordem[idx]] = penetracao
+                    colidiu = True
+                idx += 1
+        return colidiu, colisions
 
 
     def build_world(self):
