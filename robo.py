@@ -38,10 +38,10 @@ class Robo():
             os.makedirs("capturas_visao")
         self.frame_counter = 0
 
-        self.delay_visao = 1 # segundos de delay para o sensor de visão, para testar o delay na percepção do robô
+        self.delay_visao = 0 # segundos de delay para o sensor de visão, para testar o delay na percepção do robô
         self.delay_visao_atual = 0
 
-        self.export_vision = False # Se True, exporta a visão como PNG e Tensor, se False, só gera o Tensor sem salvar o PNG (para evitar poluir a pasta de capturas durante testes)
+        self.export_vision = True # Se True, exporta a visão como PNG e Tensor, se False, só gera o Tensor sem salvar o PNG (para evitar poluir a pasta de capturas durante testes)
 
         # NOVA TEXTURA FIXA NA GPU: Aloca apenas uma vez na inicialização
         self.vision_tex = rl.load_render_texture(self.tamanho_quadrado_visao, self.tamanho_quadrado_visao)
@@ -173,65 +173,65 @@ class Robo():
 
     def sensor_visao(self):
         """
-        Recebe a render_texture global do motor, extrai a região do robô,
-        transforma em um Tensor do PyTorch e salva como arquivo PNG para validação.
+        Versão Ultra-Otimizada Correção CFFI: Recorta na GPU e converte para Tensor de forma nativa.
         """
-
         textura_mundo = self.world.handler.motor.render_tex if self.world and self.world.handler and self.world.handler.motor else None
-        # Dispara o sensor de visão logo após renderizar tudo na textura, se ele estiver ativo
         if not textura_mundo:
             return
 
-        # 1. Obter a imagem completa a partir da textura da GPU
-        imagem_completa = rl.load_image_from_texture(textura_mundo.texture)
+        # ==========================================
+        # ETAPA 1: RECORTE E INVERSÃO DIRETO NA GPU
+        # ==========================================
+        rl.begin_texture_mode(self.vision_tex)
+        rl.clear_background(rl.BLANK)
 
-        # Inverter verticalmente (Raylib renderiza texturas de cabeça para baixo devido ao OpenGL)
-        rl.image_flip_vertical(imagem_completa)
-        
-        # Definir a caixa delimitadora (bounding box quadrada) baseada no raio de visão
-        tamanho_quadrado = self.raio_visao * 2
-        X_min = int(self.pos.x - self.raio_visao)
-        Y_min = int((self.pos.y) - self.raio_visao)
-        
-        # Recortar a imagem nativamente usando Raylib
-        recorte_rect = rl.Rectangle(X_min, Y_min, tamanho_quadrado, tamanho_quadrado)
-        rl.image_crop(imagem_completa, recorte_rect)
-        
-        # 2. Exportar como PNG diretamente pelo Raylib para verificar visualmente na pasta
+        # Região de origem (Mundo)
+        X_min = self.pos.x - self.raio_visao
+        Y_min = (self.world.handler.motor.WINDOW_HEIGHT - self.pos.y) - self.raio_visao
+        src_rect = rl.Rectangle(X_min, Y_min, self.tamanho_quadrado_visao, self.tamanho_quadrado_visao)
+
+        # Região de destino (Nossa mini textura)
+        # Passamos a altura negativa (-self.tamanho_quadrado_visao) para a GPU inverter verticalmente de graça!
+        dest_rect = rl.Rectangle(0, 0, self.tamanho_quadrado_visao, -self.tamanho_quadrado_visao)
+
+        # Copia os pixels de GPU para GPU instantaneamente
+        rl.draw_texture_pro(textura_mundo.texture, src_rect, dest_rect, rl.Vector2(0, 0), 0.0, rl.WHITE)
+        rl.end_texture_mode()
+
+        # ==========================================
+        # ETAPA 2: BAIXAR APENAS A REGIÃO MINI PARA A CPU
+        # ==========================================
+        imagem_visao = rl.load_image_from_texture(self.vision_tex.texture)
+
+        # Exportação para validação (mantenha desativado durante execução normal)
         if self.export_vision:
             caminho_png = f"capturas_visao/visao_frame_{self.frame_counter}.png"
-            rl.export_image(imagem_completa, caminho_png.encode('utf-8'))
+            rl.export_image(imagem_visao, caminho_png.encode('utf-8'))
+
+        # ==========================================
+        # ETAPA 3: CONVERSÃO BRUTA PARA NUMPY (CORRIGIDO PARA CFFI)
+        # ==========================================
+        # Pegamos o tamanho total em bytes (Largura * Altura * 4 canais RGBA)
+        tamanho_bytes = self.tamanho_quadrado_visao * self.tamanho_quadrado_visao * 4
         
-        # 3. Converter os dados de pixels em formato legível para o Python (Numpy -> Torch Tensor)
-        # O formato padrão do Raylib é PIXELFORMAT_UNCOMPRESSED_R8G8B8A8
-        ponteiro_pixels = rl.load_image_colors(imagem_completa)
+        # CORREÇÃO AQUI: Usamos rl.ffi.buffer para ler o ponteiro CFFI diretamente sem ctypes
+        buffer_memoria = rl.ffi.buffer(imagem_visao.data, tamanho_bytes)
         
-        # Cria uma lista de inteiros a partir do buffer de cores
-        num_pixels = tamanho_quadrado * tamanho_quadrado
-        lista_cores = [ponteiro_pixels[i] for i in range(num_pixels)]
-        
-        # Formata os dados em uma matriz estruturada [R, G, B, A]
-        dados_np = np.zeros((tamanho_quadrado, tamanho_quadrado, 4), dtype=np.uint8)
-        idx = 0
-        for y in range(tamanho_quadrado):
-            for x in range(tamanho_quadrado):
-                cor = lista_cores[idx]
-                dados_np[y, x, 0] = cor.r
-                dados_np[y, x, 1] = cor.g
-                dados_np[y, x, 2] = cor.b
-                dados_np[y, x, 3] = cor.a
-                idx += 1
-                
-        # Liberar a memória dos pixels e da imagem na CPU (Evita memory leak)
-        rl.unload_image_colors(ponteiro_pixels)
-        rl.unload_image(imagem_completa)
-        
-        # 4. Criar o Tensor do PyTorch (Formato padrão de redes: [Canais, Altura, Largura])
+        # Criamos o array Numpy mapeando esse bloco de memória e tirando uma cópia rápida
+        dados_np = np.frombuffer(buffer_memoria, dtype=np.uint8).reshape((self.tamanho_quadrado_visao, self.tamanho_quadrado_visao, 4)).copy()
+
+        # Liberamos a memória da imagem da CPU imediatamente para evitar Memory Leak
+        rl.unload_image(imagem_visao)
+
+        # ==========================================
+        # ETAPA 4: GERAR TENSOR PYTORCH
+        # ==========================================
         tensor_torch = torch.from_numpy(dados_np).permute(2, 0, 1).float() / 255.0
-        
-        # Exemplo de print para provar o formato do Tensor gerado:
-        print(f"[Frame {self.frame_counter}] Tensor da Visão gerado com shape: {tensor_torch.shape}")
-        
+
+        # Opcional: print reduzido para não travar o console
+        if self.frame_counter % 60 == 0:
+            print(f"[FPS Info] Tensor gerado com sucesso. Formato: {tensor_torch.shape}")
+
         self.frame_counter += 1
         return tensor_torch
         
