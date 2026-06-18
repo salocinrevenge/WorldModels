@@ -29,8 +29,8 @@ class Robo():
         self.tipos_controle = ["absoluto", "rotacional", "rodas"]
         self.controle_atual = 0
 
-        self.tipos_sensores = ["visao", "tato"]
-        self.sensores_ativos = [True, True]
+        self.tipos_sensores = ["visao", "tato", "acc", "gyro"]
+        self.sensores_ativos = [True, True, True, True]
         self.tato = {"N": 0, "S": 0, "E": 0, "W": 0}
 
         # Cria um diretório para salvar os frames capturados, se não existir
@@ -45,6 +45,9 @@ class Robo():
 
         # NOVA TEXTURA FIXA NA GPU: Aloca apenas uma vez na inicialização
         self.vision_tex = rl.load_render_texture(self.tamanho_quadrado_visao, self.tamanho_quadrado_visao)
+
+        self.last_pos = [rl.Vector2(self.pos.x, self.pos.y), rl.Vector2(self.pos.x, self.pos.y), rl.Vector2(self.pos.x, self.pos.y)]
+        self.last_angulo = [self.angulo, self.angulo]
         
 
     def controles(self):
@@ -125,6 +128,8 @@ class Robo():
         # Atualiza a velocidade e a posição do robô com base na aceleração
         self.vel.x += self.acc.x 
         self.vel.y += self.acc.y
+
+        print("Vel x: " + str(self.vel.x) + ", Vel y: " + str(self.vel.y))
         self.pos_alvo.x = self.pos.x + self.vel.x
         if self.world.test_robot_colision_with_terrain(self.raio, self.pos_alvo)[0]: # primeiro o x
             self.pos_alvo.x = self.pos.x
@@ -135,6 +140,9 @@ class Robo():
             self.pos_alvo.y = self.pos.y
         else:
             self.pos.y = self.pos_alvo.y
+
+        self.last_pos.pop(0)
+        self.last_pos.append(rl.Vector2(self.pos.x, self.pos.y))
 
         # Aplica atrito para reduzir a velocidade ao longo do tempo
         self.vel.x *= (1 - self.atrito)
@@ -147,11 +155,14 @@ class Robo():
         # Atualiza a velocidade angular e o ângulo do robô com base na aceleração angular
         self.vel_angular += self.acc_angular
         self.angulo += self.vel_angular
+
+        self.last_angulo.pop(0)
+        self.last_angulo.append(self.angulo)
+
         # Aplica atrito angular para reduzir a velocidade angular ao longo do tempo
         self.vel_angular *= (1 - self.atrito_angular)
         if self.vel_angular < self.limiar_atrito_angular and self.vel_angular > -self.limiar_atrito_angular:
-            self.vel_angular = 0
-        
+            self.vel_angular = 0        
 
     def update(self, dt:float) -> None:
         self.delay_visao_atual += dt
@@ -162,14 +173,32 @@ class Robo():
             if self.delay_visao_atual >= self.delay_visao:  # Ta na hora de atualizar o sensor de visão, se tiver passado o tempo de delay
                 self.delay_visao_atual = 0
                 self.sensor_visao()
-    
+
+        if self.sensores_ativos[self.tipos_sensores.index("acc")]:
+            self.sensor_accelerometer()
+        
+        if self.sensores_ativos[self.tipos_sensores.index("gyro")]:
+            self.sensor_gyroscope()
+
         self.controles()
         self.phisics(dt)
+
+    def sensor_accelerometer(self):
+        # Simula o sensor de aceleração
+        v1 = rl.Vector2(self.last_pos[-2].x - self.last_pos[-3].x, self.last_pos[-2].y - self.last_pos[-3].y)
+        v2 = rl.Vector2(self.last_pos[-1].x - self.last_pos[-2].x, self.last_pos[-1].y - self.last_pos[-2].y)
+
+        self.acelerometer = rl.Vector2(v2.x - v1.x, v2.y - v1.y)
+        print("Acc x: " + str(self.acelerometer.x) + ", Acc y: " + str(self.acelerometer.y))
+
+    def sensor_gyroscope(self):
+        # Simula o sensor de giroscópio
+        self.gyroscope = self.last_angulo[-1] - self.last_angulo[-2]
+        print(self.gyroscope)
 
     def sensor_tato(self):
         # Detecta para cada 
         self.tato = self.world.test_robot_colision_with_terrain(self.raio_tato, self.pos_alvo)[1]
-        print("Sensor de tato:", self.tato)
 
     def sensor_visao(self):
         """
@@ -227,10 +256,6 @@ class Robo():
         # ETAPA 4: GERAR TENSOR PYTORCH
         # ==========================================
         tensor_torch = torch.from_numpy(dados_np).permute(2, 0, 1).float() / 255.0
-
-        # Opcional: print reduzido para não travar o console
-        if self.frame_counter % 60 == 0:
-            print(f"[FPS Info] Tensor gerado com sucesso. Formato: {tensor_torch.shape}")
 
         self.frame_counter += 1
         return tensor_torch
