@@ -3,7 +3,8 @@ from robo import Robo
 import pyray as rl
 
 class Curiosity_world():
-    def __init__(self):
+    def __init__(self, handler):
+        self.handler = handler
         self.terreno = self.build_world() # Lista de objetos do terreno
         self.agente = Robo(self) # Agente do mundo, para interagir com o ambiente
         self.escala = 50
