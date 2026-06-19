@@ -55,6 +55,7 @@ class Robo():
 
         self.brain = Brain(self, num_actions=5)
         self.create_encoders()
+        self.autonomous = True # Se True, o robô é controlado pelo cérebro, se False, é controlado pelo usuário
 
     def create_encoders(self):
 
@@ -66,6 +67,12 @@ class Robo():
 
             def __call__(self, x):
                 with torch.no_grad():
+                    if len(x.shape)==3:
+                        # se tem 4 canais, remove o canal alpha
+                        if x.shape[0] == 4:
+                            x = x[0:3, :, :]
+                        # Adiciona uma dimensão de batch
+                        x = x.unsqueeze(0)
                     x = self.feature_extractor(x)
                     latent_space = torch.squeeze(self.avgpool(x))
                 return latent_space
@@ -77,14 +84,14 @@ class Robo():
             def __call__(self, x):
                 if isinstance(x, torch.Tensor):
                     return x.flatten() # Achata o tensor para garantir que seja unidimensional
-                if isinstance(x, rl.Vector2):
+                if hasattr(x, 'x') and hasattr(x, 'y'):
                     return torch.tensor([x.x, x.y])
                 if isinstance(x, dict):
                     inputs = []
                     for key in self.ordem:
                         inputs.append(x[key])
                     return torch.tensor(inputs)
-                return x
+                return torch.tensor([x]) # Converte para tensor, caso não seja nenhum dos tipos acima
 
         self.encoders = {
             "visao": MobileEncoder(),
@@ -95,75 +102,94 @@ class Robo():
         
 
     def controles(self):
-        match self.tipos_controle[self.controle_atual]:
-            case "absoluto":
-
-                # Se precionar as setas, o robô se move na direção correspondente
-                if (rl.is_key_down(rl.KEY_RIGHT) or rl.is_key_down(rl.KEY_D)) and (rl.is_key_down(rl.KEY_LEFT) or rl.is_key_down(rl.KEY_A)):
-                    self.acc.x = 0
-                elif rl.is_key_down(rl.KEY_RIGHT) or rl.is_key_down(rl.KEY_D):
+        if self.autonomous:
+            brain_output = self.brain.update()
+            match brain_output:
+                case 0: # Mover para a direita
                     self.acc.x = self.acc_max
-                elif rl.is_key_down(rl.KEY_LEFT) or rl.is_key_down(rl.KEY_A):
+                    self.acc.y = 0
+                case 1: # Mover para a esquerda
                     self.acc.x = -self.acc_max
-                else:
-                    self.acc.x = 0
-
-                if (rl.is_key_down(rl.KEY_DOWN) or rl.is_key_down(rl.KEY_S)) and (rl.is_key_down(rl.KEY_UP) or rl.is_key_down(rl.KEY_W)):
                     self.acc.y = 0
-                elif rl.is_key_down(rl.KEY_DOWN) or rl.is_key_down(rl.KEY_S):
+                case 2: # Mover para baixo
+                    self.acc.x = 0
                     self.acc.y = self.acc_max
-                elif rl.is_key_down(rl.KEY_UP) or rl.is_key_down(rl.KEY_W):
+                case 3: # Mover para cima
+                    self.acc.x = 0
                     self.acc.y = -self.acc_max
-                else:            
-                    self.acc.y = 0
-
-            case "rotacional":
-                # Setas para os lados rotacionam o robô, setas para cima e para baixo movem o robô para frente e para trás na direção que ele está virado
-                if (rl.is_key_down(rl.KEY_RIGHT) or rl.is_key_down(rl.KEY_D)) and (rl.is_key_down(rl.KEY_LEFT) or rl.is_key_down(rl.KEY_A)):
-                    self.acc_angular = 0
-                elif rl.is_key_down(rl.KEY_RIGHT) or rl.is_key_down(rl.KEY_D):
-                    self.acc_angular = self.acc_max_angular
-                elif rl.is_key_down(rl.KEY_LEFT) or rl.is_key_down(rl.KEY_A):
-                    self.acc_angular = -self.acc_max_angular
-                else:
-                    self.acc_angular = 0
-
-                if (rl.is_key_down(rl.KEY_DOWN) or rl.is_key_down(rl.KEY_S)) and (rl.is_key_down(rl.KEY_UP) or rl.is_key_down(rl.KEY_W)):
+                case 4: # Parar
                     self.acc.x = 0
                     self.acc.y = 0
-                elif rl.is_key_down(rl.KEY_DOWN) or rl.is_key_down(rl.KEY_S):
-                    self.acc.x = self.acc_max * math.cos(self.angulo)
-                    self.acc.y = self.acc_max * math.sin(self.angulo)
-                elif rl.is_key_down(rl.KEY_UP) or rl.is_key_down(rl.KEY_W):
-                    self.acc.x = -self.acc_max * math.cos(self.angulo)
-                    self.acc.y = -self.acc_max * math.sin(self.angulo)
-                else:            
-                    self.acc.x = 0
-                    self.acc.y = 0
+        else:
+            match self.tipos_controle[self.controle_atual]:
+                case "absoluto":
 
-            case "rodas":
-                # Usa seta cima e baixo para controlar a roda direita, e W e S para controlar a roda esquerda, o robô se move na direção correspondente a diferença de velocidade entre as rodas
-                if (rl.is_key_down(rl.KEY_W)) and (rl.is_key_down(rl.KEY_S)):
-                    acc_roda_esquerda = 0
-                elif rl.is_key_down(rl.KEY_W):
-                    acc_roda_esquerda = -self.acc_max
-                elif rl.is_key_down(rl.KEY_S):
-                    acc_roda_esquerda = self.acc_max
-                else:
-                    acc_roda_esquerda = 0
+                    # Se precionar as setas, o robô se move na direção correspondente
+                    if (rl.is_key_down(rl.KEY_RIGHT) or rl.is_key_down(rl.KEY_D)) and (rl.is_key_down(rl.KEY_LEFT) or rl.is_key_down(rl.KEY_A)):
+                        self.acc.x = 0
+                    elif rl.is_key_down(rl.KEY_RIGHT) or rl.is_key_down(rl.KEY_D):
+                        self.acc.x = self.acc_max
+                    elif rl.is_key_down(rl.KEY_LEFT) or rl.is_key_down(rl.KEY_A):
+                        self.acc.x = -self.acc_max
+                    else:
+                        self.acc.x = 0
 
-                if (rl.is_key_down(rl.KEY_UP)) and (rl.is_key_down(rl.KEY_DOWN)):
-                    acc_roda_direita = 0
-                elif rl.is_key_down(rl.KEY_UP):
-                    acc_roda_direita = -self.acc_max
-                elif rl.is_key_down(rl.KEY_DOWN):
-                    acc_roda_direita = self.acc_max
-                else:
-                    acc_roda_direita = 0
+                    if (rl.is_key_down(rl.KEY_DOWN) or rl.is_key_down(rl.KEY_S)) and (rl.is_key_down(rl.KEY_UP) or rl.is_key_down(rl.KEY_W)):
+                        self.acc.y = 0
+                    elif rl.is_key_down(rl.KEY_DOWN) or rl.is_key_down(rl.KEY_S):
+                        self.acc.y = self.acc_max
+                    elif rl.is_key_down(rl.KEY_UP) or rl.is_key_down(rl.KEY_W):
+                        self.acc.y = -self.acc_max
+                    else:            
+                        self.acc.y = 0
 
-                self.acc.x = (acc_roda_esquerda + acc_roda_direita) * math.cos(self.angulo) / 2
-                self.acc.y = (acc_roda_esquerda + acc_roda_direita) * math.sin(self.angulo) / 2
-                self.acc_angular = (acc_roda_direita - acc_roda_esquerda) * self.acc_max_angular
+                case "rotacional":
+                    # Setas para os lados rotacionam o robô, setas para cima e para baixo movem o robô para frente e para trás na direção que ele está virado
+                    if (rl.is_key_down(rl.KEY_RIGHT) or rl.is_key_down(rl.KEY_D)) and (rl.is_key_down(rl.KEY_LEFT) or rl.is_key_down(rl.KEY_A)):
+                        self.acc_angular = 0
+                    elif rl.is_key_down(rl.KEY_RIGHT) or rl.is_key_down(rl.KEY_D):
+                        self.acc_angular = self.acc_max_angular
+                    elif rl.is_key_down(rl.KEY_LEFT) or rl.is_key_down(rl.KEY_A):
+                        self.acc_angular = -self.acc_max_angular
+                    else:
+                        self.acc_angular = 0
+
+                    if (rl.is_key_down(rl.KEY_DOWN) or rl.is_key_down(rl.KEY_S)) and (rl.is_key_down(rl.KEY_UP) or rl.is_key_down(rl.KEY_W)):
+                        self.acc.x = 0
+                        self.acc.y = 0
+                    elif rl.is_key_down(rl.KEY_DOWN) or rl.is_key_down(rl.KEY_S):
+                        self.acc.x = self.acc_max * math.cos(self.angulo)
+                        self.acc.y = self.acc_max * math.sin(self.angulo)
+                    elif rl.is_key_down(rl.KEY_UP) or rl.is_key_down(rl.KEY_W):
+                        self.acc.x = -self.acc_max * math.cos(self.angulo)
+                        self.acc.y = -self.acc_max * math.sin(self.angulo)
+                    else:            
+                        self.acc.x = 0
+                        self.acc.y = 0
+
+                case "rodas":
+                    # Usa seta cima e baixo para controlar a roda direita, e W e S para controlar a roda esquerda, o robô se move na direção correspondente a diferença de velocidade entre as rodas
+                    if (rl.is_key_down(rl.KEY_W)) and (rl.is_key_down(rl.KEY_S)):
+                        acc_roda_esquerda = 0
+                    elif rl.is_key_down(rl.KEY_W):
+                        acc_roda_esquerda = -self.acc_max
+                    elif rl.is_key_down(rl.KEY_S):
+                        acc_roda_esquerda = self.acc_max
+                    else:
+                        acc_roda_esquerda = 0
+
+                    if (rl.is_key_down(rl.KEY_UP)) and (rl.is_key_down(rl.KEY_DOWN)):
+                        acc_roda_direita = 0
+                    elif rl.is_key_down(rl.KEY_UP):
+                        acc_roda_direita = -self.acc_max
+                    elif rl.is_key_down(rl.KEY_DOWN):
+                        acc_roda_direita = self.acc_max
+                    else:
+                        acc_roda_direita = 0
+
+                    self.acc.x = (acc_roda_esquerda + acc_roda_direita) * math.cos(self.angulo) / 2
+                    self.acc.y = (acc_roda_esquerda + acc_roda_direita) * math.sin(self.angulo) / 2
+                    self.acc_angular = (acc_roda_direita - acc_roda_esquerda) * self.acc_max_angular
 
 
 
@@ -173,7 +199,6 @@ class Robo():
         self.vel.x += self.acc.x 
         self.vel.y += self.acc.y
 
-        print("Vel x: " + str(self.vel.x) + ", Vel y: " + str(self.vel.y))
         self.pos_alvo.x = self.pos.x + self.vel.x
         if self.world.test_robot_colision_with_terrain(self.raio, self.pos_alvo)[0]: # primeiro o x
             self.pos_alvo.x = self.pos.x
@@ -225,6 +250,7 @@ class Robo():
             self.sensor_gyroscope()
 
         self.controles()
+        print(f" Reconstruction Loss: {self.brain.get_reconstruction_loss()} | Total Reward: {self.brain.get_total_reward()}") # Imprime a perda de reconstrução e a recompensa total para monitorar o desempenho do agente e do modelo de mundo ao longo do tempo
         self.phisics(dt)
 
     def sensor_accelerometer(self):

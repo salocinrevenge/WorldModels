@@ -18,8 +18,8 @@ class Actor(nn.Module):
 
     def forward(self, x):
         features = self.feature_extractor(x)
-        policy = self.actor(features)
-        self.current_policy = policy # Probabilidade de cada ação ser a melhor ação, dada a observação do ambiente
+        policy = self.actor(features).detach().numpy()
+        self.current_policy = torch.tensor(policy) # Probabilidade de cada ação ser a melhor ação, dada a observação do ambiente
         self.current_action = np.random.choice(len(policy), 1, p=policy)[0] # Escolhe uma ação com base na distribuição de probabilidade dada pela política
         return self.current_action
     
@@ -98,6 +98,8 @@ class Brain():
         self.args = ConfigArgs()
         self.num_actions = num_actions
 
+        self.total_reward = None # Recompensa total, que é a soma da recompensa extrínseca e da recompensa intrínseca, usada para monitorar o desempenho do agente ao longo do tempo. Será atualizada a cada passo do ambiente chamando o método get_total_reward(), que calcula a recompensa total com base na recompensa extrínseca fornecida pelo agente e na recompensa intrínseca calculada com base na diferença entre o estado atual e o estado anterior no espaço latente.
+        self.reconstruction_loss = None # Perda de reconstrução do modelo de mundo, usada para monitorar o desempenho do modelo de mundo ao longo do tempo. Será atualizada a cada passo do ambiente chamando o método update(), que calcula a perda de reconstrução com base na diferença entre a estimativa do próximo estado feita pelo modelo de mundo e a observação real do próximo estado no espaço latente.
         self.sensors_latent_info = {} # Dicionário para armazenar as informações dos sensores no espaço latente, onde a chave é o nome do sensor e o valor é o tensor do espaço latente correspondente
         self.sensors_names = [] # Lista para armazenar os nomes dos sensores, para manter a ordem e facilitar o acesso aos tensores no espaço latente durante a concatenação
         self.current_state = None # Estado atual concatenado de sensores, que será usado pelo ator e crítico. Será atualizado a cada passo do ambiente chamando o método get_state(), que concatena os espaços latentes dos sensores na ordem definida por self.sensors_names.
@@ -142,10 +144,11 @@ class Brain():
          garantindo que a mesma ordem seja mantida em cada passo do ambiente."""
         self.last_state = self.current_state # Atualiza o estado anterior antes de calcular o novo estado
         state_tensors = [self.sensors_latent_info[name] for name in self.sensors_names]
-        self.current_state = torch.stack(state_tensors)
+        
+        self.current_state = torch.cat(state_tensors)
 
         if self.need_to_initialize_models:
-            self.initialize_models(input_length=self.current_state.shape[0]*self.current_state.shape[1]) # O input length é o tamanho do estado concatenado dos sensores, que é o número de sensores vezes o tamanho do espaço latente de cada sensor
+            self.initialize_models(input_length=self.current_state.shape[0])
             self.need_to_initialize_models = False
 
     def set_info_sensor(self, info, sensor_name, encoder):
@@ -170,22 +173,37 @@ class Brain():
         e atualizar o crítico e o ator."""
         self.reforco = reforco
 
+    def get_total_reward(self):
+        """Retorna a recompensa total, que é a soma da recompensa extrínseca
+        e da recompensa intrínseca. A recompensa intrínseca é calculada com base
+        na diferença entre o estado atual e o estado anterior no espaço latente,
+        usando o modelo de mundo para estimar a próxima observação e comparando
+        com a observação real."""
+        return self.total_reward
+    
+    def get_reconstruction_loss(self):
+        """Retorna a perda de reconstrução do modelo de mundo, que é usada para monitorar o desempenho do modelo de mundo ao longo do tempo. A perda de reconstrução é calculada com base na diferença entre a estimativa do próximo estado feita pelo modelo de mundo e a observação real do próximo estado no espaço latente."""
+        return self.reconstruction_loss
+
     def update(self):
         """Faz o ciclo completo"""
-        self.get_state() # Atualiza o estado concatenando os espaços latentes dos sensores
+        self.get_state() # Atualiza o estado concatenando os espaços latentes dos sensores[]
         self.actor(self.current_state) # Passa o estado atualizado pelo ator para obter a política de ações
 
+        if self.last_state is None:
+            return self.actor.current_action # Se não houver estado anterior, retorna a ação escolhida pelo ator e para
         advantages = torch.zeros_like(self.actor.current_policy) # Critico e actor
         action_tensor_for_icm = torch.tensor([self.actor.current_action], dtype=torch.long)
         last_v = self.critic(self.last_state)[0]
         current_v = self.critic(self.current_state)[0]
-        obs_cat = torch.cat([self.last_state, self.current_state], dim = 0)
+        obs_cat = torch.stack([self.last_state, self.current_state], dim = 0)
 
         # Modelo de mundo
         features = self.feature_extractor(obs_cat) # Estados no espaço latente, concatenados
         inverse_action_prob = self.inverse_model(features) # Acao tomada dado variavel latente. Acao predita
         est_next_features = self.forward_model(action_tensor_for_icm, features[0:1]) # Dado o espaço latente do estado atual e a ação tomada, estima o espaço latente do próximo estado
         forward_loss = self.mse_loss(est_next_features, features[1])
+        self.reconstruction_loss = forward_loss.detach().item() # Apenas para monitorar a perda de reconstrução, sem afetar o cálculo do gradiente
 
         # Use the correct action tensor as target for inverse_loss
         inverse_loss = self.xe_loss(inverse_action_prob, action_tensor_for_icm.view(-1))
@@ -195,8 +213,9 @@ class Brain():
         intrinsic_reward = self.args.eta*forward_loss.detach()
         immediate_extrinsic_reward = self.reforco
         total_reward_val = immediate_extrinsic_reward + intrinsic_reward
+        self.total_reward = total_reward_val
 
-        advantages[0,self.actor.current_action] = total_reward_val + self.args.discounted_factor * current_v - last_v
+        advantages[self.actor.current_action] = total_reward_val + self.args.discounted_factor * current_v - last_v
         c_target = total_reward_val + self.args.discounted_factor * current_v
 
         # Losses
