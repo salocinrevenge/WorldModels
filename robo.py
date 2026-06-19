@@ -3,7 +3,10 @@ import math
 import pyray as rl
 import numpy as np
 import torch
+import torchvision.models as models
 import os
+
+from brain import Brain
 
 class Robo():
     def __init__(self, world=None):
@@ -27,11 +30,12 @@ class Robo():
         self.raio_tato = 30
 
         self.tipos_controle = ["absoluto", "rotacional", "rodas"]
-        self.controle_atual = 0
+        self.controle_atual = 1
 
         self.tipos_sensores = ["visao", "tato", "acc", "gyro"]
         self.sensores_ativos = [True, True, True, True]
         self.tato = {"N": 0, "S": 0, "E": 0, "W": 0}
+        self.ordem_tato = ["N", "S", "E", "W"]
 
         # Cria um diretório para salvar os frames capturados, se não existir
         if not os.path.exists("capturas_visao"):
@@ -41,13 +45,53 @@ class Robo():
         self.delay_visao = 0 # segundos de delay para o sensor de visão, para testar o delay na percepção do robô
         self.delay_visao_atual = 0
 
-        self.export_vision = True # Se True, exporta a visão como PNG e Tensor, se False, só gera o Tensor sem salvar o PNG (para evitar poluir a pasta de capturas durante testes)
+        self.export_vision = False # Se True, exporta a visão como PNG e Tensor, se False, só gera o Tensor sem salvar o PNG (para evitar poluir a pasta de capturas durante testes)
 
         # NOVA TEXTURA FIXA NA GPU: Aloca apenas uma vez na inicialização
         self.vision_tex = rl.load_render_texture(self.tamanho_quadrado_visao, self.tamanho_quadrado_visao)
 
         self.last_pos = [rl.Vector2(self.pos.x, self.pos.y), rl.Vector2(self.pos.x, self.pos.y), rl.Vector2(self.pos.x, self.pos.y)]
         self.last_angulo = [self.angulo, self.angulo]
+
+        self.brain = Brain(self, num_actions=5)
+        self.create_encoders()
+
+    def create_encoders(self):
+
+        class MobileEncoder: # Só vou usar isso aqui, acho q ta ok
+            def __init__(self):
+                self.model = models.mobilenet_v3_large(weights=models.MobileNet_V3_Large_Weights.DEFAULT)
+                self.feature_extractor = self.model.features
+                self.avgpool = self.model.avgpool
+
+            def __call__(self, x):
+                with torch.no_grad():
+                    x = self.feature_extractor(x)
+                    latent_space = torch.squeeze(self.avgpool(x))
+                return latent_space
+
+        class IdentityEncoder:
+            def __init__(self, ordem = None):
+                self.ordem = ordem 
+
+            def __call__(self, x):
+                if isinstance(x, torch.Tensor):
+                    return x.flatten() # Achata o tensor para garantir que seja unidimensional
+                if isinstance(x, rl.Vector2):
+                    return torch.tensor([x.x, x.y])
+                if isinstance(x, dict):
+                    inputs = []
+                    for key in self.ordem:
+                        inputs.append(x[key])
+                    return torch.tensor(inputs)
+                return x
+
+        self.encoders = {
+            "visao": MobileEncoder(),
+            "tato": IdentityEncoder(ordem=self.ordem_tato),
+            "acc": IdentityEncoder(),
+            "gyro": IdentityEncoder()
+        }
         
 
     def controles(self):
@@ -189,16 +233,20 @@ class Robo():
         v2 = rl.Vector2(self.last_pos[-1].x - self.last_pos[-2].x, self.last_pos[-1].y - self.last_pos[-2].y)
 
         self.acelerometer = rl.Vector2(v2.x - v1.x, v2.y - v1.y)
-        print("Acc x: " + str(self.acelerometer.x) + ", Acc y: " + str(self.acelerometer.y))
-
+        self.brain.set_info_sensor(self.acelerometer, "acc", encoder=self.encoders["acc"])
+        return self.acelerometer
+    
     def sensor_gyroscope(self):
         # Simula o sensor de giroscópio
         self.gyroscope = self.last_angulo[-1] - self.last_angulo[-2]
-        print(self.gyroscope)
+        self.brain.set_info_sensor(self.gyroscope, "gyro", encoder=self.encoders["gyro"]) 
+        return self.gyroscope
 
     def sensor_tato(self):
         # Detecta para cada 
         self.tato = self.world.test_robot_colision_with_terrain(self.raio_tato, self.pos_alvo)[1]
+        self.brain.set_info_sensor(self.tato, "tato", encoder=self.encoders["tato"])
+        return self.tato
 
     def sensor_visao(self):
         """
@@ -258,6 +306,8 @@ class Robo():
         tensor_torch = torch.from_numpy(dados_np).permute(2, 0, 1).float() / 255.0
 
         self.frame_counter += 1
+
+        self.brain.set_info_sensor(tensor_torch, "visao", encoder=self.encoders["visao"])
         return tensor_torch
         
 
