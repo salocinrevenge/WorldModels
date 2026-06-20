@@ -11,7 +11,7 @@ class Curiosity_world():
         self.agente = Robo(self, "cerebro/") # Agente do mundo, para interagir com o ambiente
         self.escala = 50
         self.ticks = 0
-        self.tempo_simulacao = 256011
+        self.tempo_simulacao = 25611
 
     def update(self, dt):
         self.agente.update(dt)
@@ -52,16 +52,17 @@ class Curiosity_world():
         rl.draw_text(f"Velocidade: ({self.agente.vel.x:.2f}, {self.agente.vel.y:.2f})", 1010, 40, 20, rl.WHITE)
         rl.draw_text(f"Aceleração: ({self.agente.acc.x:.2f}, {self.agente.acc.y:.2f})", 1010, 70, 20, rl.WHITE)
         rl.draw_text(f"Recompensa acumulada (média): {self.agente.brain.get_moving_average_reward():.2f}", 1010, 100, 20, rl.WHITE)
+        rl.draw_text(f"Reconstruction Loss: {self.agente.brain.get_reconstruction_loss():.4f}", 1010, 130, 20, rl.WHITE)
         if self.agente.last_action is not None:
             # Ao invés de texto, colocar duas barras verticais cinzas, uma para cada ação, com altura proporcional ao valor da ação, e um número indicando o valor da ação
             # Ela pode variar de -1 a 1, então a barra deve ser centralizada em 0, com altura máxima de 50 pixels. se 1, 25 para cima, se -1, 25 para baixo, com valores intermediario. Uma linha branca deve estar no fim da barra
-            rl.draw_text(f"Última ação: ({self.agente.last_action[0].item():.2f}, {self.agente.last_action[1].item():.2f})", 1010, 130, 20, rl.WHITE)
-            rl.draw_rectangle(1270, 125, 20, 50, rl.GRAY)
-            rl.draw_rectangle(1270, 150-max(int(self.agente.last_action[0].item() * 25), 0), 20, abs(int(self.agente.last_action[0].item() * 25)), rl.BLUE)
-            rl.draw_rectangle(1300, 125, 20, 50, rl.GRAY)
-            rl.draw_rectangle(1300, 150-max(int(self.agente.last_action[1].item() * 25), 0), 20, abs(int(self.agente.last_action[1].item() * 25)), rl.BLUE)
+            rl.draw_text(f"Última ação: ({self.agente.last_action[0].item():.2f}, {self.agente.last_action[1].item():.2f})", 1010, 160, 20, rl.WHITE)
+            rl.draw_rectangle(1270, 155, 20, 50, rl.GRAY)
+            rl.draw_rectangle(1270, 180-max(int(self.agente.last_action[0].item() * 25), 0), 20, abs(int(self.agente.last_action[0].item() * 25)), rl.BLUE)
+            rl.draw_rectangle(1300, 155, 20, 50, rl.GRAY)
+            rl.draw_rectangle(1300, 180-max(int(self.agente.last_action[1].item() * 25), 0), 20, abs(int(self.agente.last_action[1].item() * 25)), rl.BLUE)
         if len(self.agente.brain.memory) < self.agente.brain.warm_up_steps:
-            rl.draw_text(f"WARM UP: {len(self.agente.brain.memory)}/{self.agente.brain.warm_up_steps}", 1010, 175, 20, rl.RED)
+            rl.draw_text(f"WARM UP: {len(self.agente.brain.memory)}/{self.agente.brain.warm_up_steps}", 1010, 185, 20, rl.RED)
 
     def render(self):
         self.render_terreno()

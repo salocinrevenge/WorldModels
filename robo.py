@@ -171,8 +171,8 @@ class Robo():
                 if self.autonomous:
                     brain_output = self.brain.update()
                     self.last_action = brain_output
-                    acc_roda_esquerda = brain_output[0].item() * self.acc_max
-                    acc_roda_direita = brain_output[1].item() * self.acc_max
+                    acc_roda_esquerda = -brain_output[0].item() * self.acc_max
+                    acc_roda_direita = -brain_output[1].item() * self.acc_max
                 else:
                     # Usa seta cima e baixo para controlar a roda direita, e W e S para controlar a roda esquerda, o robô se move na direção correspondente a diferença de velocidade entre as rodas
                     if (rl.is_key_down(rl.KEY_W)) and (rl.is_key_down(rl.KEY_S)):
@@ -299,7 +299,7 @@ class Robo():
 
     def sensor_visao(self):
         """
-        Versão Ultra-Otimizada Correção CFFI: Recorta na GPU e converte para Tensor de forma nativa.
+        Recorta na GPU e converte para Tensor de forma nativa.
         """
         textura_mundo = self.world.handler.motor.render_tex if self.world and self.world.handler and self.world.handler.motor else None
         if not textura_mundo:
@@ -382,13 +382,13 @@ class Robo():
             case "rodas":
                 # Colisao
                 rl.draw_circle(int(self.pos.x), int(self.pos.y), self.raio, rl.Color(20,100,100,255))
-                # Desenha um triangulo isoceles representando o robô na posição atual
-                rl.draw_poly(self.pos, 3, self.raio, (self.angulo+math.pi) * 180 / math.pi, rl.BLUE)
-                pos_ponta = rl.Vector2(self.pos.x + self.raio//2 * math.cos(self.angulo), self.pos.y + self.raio//2 * math.sin(self.angulo))
-                rl.draw_poly(pos_ponta, 3, self.raio//2, (self.angulo+math.pi) * 180 / math.pi, rl.RED)
                 # Com duas rodas atras desenhadas como círculos, uma para cada roda
                 pos_roda_esquerda = rl.Vector2(self.pos.x - self.raio//2 * math.cos(self.angulo + math.pi / 2), self.pos.y - self.raio//2 * math.sin(self.angulo + math.pi / 2))
                 pos_roda_direita = rl.Vector2(self.pos.x - self.raio//2 * math.cos(self.angulo - math.pi / 2), self.pos.y - self.raio//2 * math.sin(self.angulo - math.pi / 2))
                 rl.draw_circle(int(pos_roda_esquerda.x), int(pos_roda_esquerda.y), self.raio//4, rl.GREEN)
                 rl.draw_circle(int(pos_roda_direita.x), int(pos_roda_direita.y), self.raio//4, rl.GREEN)
+                # Desenha um triangulo isoceles representando o robô na posição atual
+                rl.draw_poly(self.pos, 3, self.raio, (self.angulo+math.pi) * 180 / math.pi, rl.BLUE)
+                pos_ponta = rl.Vector2(self.pos.x + self.raio//2 * math.cos(self.angulo), self.pos.y + self.raio//2 * math.sin(self.angulo))
+                rl.draw_poly(pos_ponta, 3, self.raio//2, (self.angulo+math.pi) * 180 / math.pi, rl.RED)
 

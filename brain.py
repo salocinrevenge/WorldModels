@@ -123,11 +123,23 @@ class FeatureExtractor(nn.Module):
     def forward(self, x):
         return self.fc(x)
 
+class FeatureDecoder(nn.Module):
+    def __init__(self, hidden_dims, space_dims):
+        super(FeatureDecoder, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_dims, hidden_dims),
+            nn.ReLU(True),
+            nn.Linear(hidden_dims, space_dims)
+        )
+
+    def forward(self, features):
+        return self.fc(features)
+
 class ConfigArgs:
     beta = 0.2
     eta = 500.0 # Scale factor for intrinsic reward
     discounted_factor = 0.99
-    lr = 3e-4 # Taxa de aprendizado padrão do SAC para todas as redes
+    lr = 3e-1 # Taxa de aprendizado padrão do SAC para todas as redes
     batch_size = 256
     buffer_capacity = 100000
     tau = 0.005 # Fator de atualização suave da rede alvo
@@ -155,7 +167,7 @@ class Brain():
         
         self.memory = ReplayBuffer(self.args.buffer_capacity)
         self.n_steps_until_save = self.args.batch_size * 3 # Salva os modelos a cada 3 batches completos
-        self.warm_up_steps = 2000 # Número de etapas para aquecer o buffer de replay
+        self.warm_up_steps = 256 # Número de etapas para aquecer o buffer de replay
         self.get_moving_average_reward_window = deque(maxlen=len_moving_average) # Janela para calcular a média móvel da recompensa
 
     def save_models(self):
@@ -165,6 +177,7 @@ class Brain():
             torch.save(self.feature_extractor.state_dict(), f"{self.path_to_save_models}feature_extractor.pth")
             torch.save(self.forward_model.state_dict(), f"{self.path_to_save_models}forward_model.pth")
             torch.save(self.inverse_model.state_dict(), f"{self.path_to_save_models}inverse_model.pth")
+            torch.save(self.feature_decoder.state_dict(), f"{self.path_to_save_models}feature_decoder.pth")
             print(f"Modelos salvos com sucesso em {self.path_to_save_models}!")
 
     def initialize_models(self, input_length):
@@ -179,6 +192,7 @@ class Brain():
         self.feature_extractor = FeatureExtractor(input_length, hidden_dims)
         self.forward_model = ForwardModel(self.num_actions, hidden_dims)
         self.inverse_model = InverseModel(self.num_actions, hidden_dims)
+        self.feature_decoder = FeatureDecoder(hidden_dims, input_length)
 
         # load if available
         if self.path_to_save_models is not None:
@@ -189,6 +203,7 @@ class Brain():
                 self.feature_extractor.load_state_dict(torch.load(f"{self.path_to_save_models}feature_extractor.pth"))
                 self.forward_model.load_state_dict(torch.load(f"{self.path_to_save_models}forward_model.pth"))
                 self.inverse_model.load_state_dict(torch.load(f"{self.path_to_save_models}inverse_model.pth"))
+                self.feature_decoder.load_state_dict(torch.load(f"{self.path_to_save_models}feature_decoder.pth"))
                 print(f"Modelos carregados com sucesso de {self.path_to_save_models}!")
             except FileNotFoundError:
                 print(f"Modelos não encontrados em {self.path_to_save_models}, iniciando do zero.")
@@ -199,6 +214,7 @@ class Brain():
         
         self.icm_params = list(self.feature_extractor.parameters()) + list(self.forward_model.parameters()) + list(self.inverse_model.parameters())
         self.icm_optim = optim.Adam(self.icm_params, lr=self.args.lr)
+        self.decoder_optim = optim.Adam(self.feature_decoder.parameters(), lr=self.args.lr)
 
         # Entropia Automática (Auto-tuning Alpha)
         self.target_entropy = -torch.prod(torch.Tensor([self.num_actions])).item()
@@ -249,8 +265,16 @@ class Brain():
         return self.args.eta * forward_loss.item()
 
     def update(self):
+        
         self.get_state()
         self.n_steps_until_save -= 1
+
+        self.icm_optim.zero_grad()
+        self.c_optim.zero_grad()
+        self.a_optim.zero_grad()
+        self.alpha_optim.zero_grad()
+        self.decoder_optim.zero_grad()
+
         if self.n_steps_until_save <= 0:
             self.save_models()
             self.n_steps_until_save = self.args.batch_size * 10
@@ -297,7 +321,6 @@ class Brain():
             icm_loss = (1 - self.args.beta) * inverse_loss + self.args.beta * forward_loss
             self.reconstruction_loss = forward_loss.item()
 
-            self.icm_optim.zero_grad()
             icm_loss.backward()
             self.icm_optim.step()
 
@@ -315,7 +338,6 @@ class Brain():
             qf2_loss = self.mse_loss(qf2, next_q_value)
             critic_loss = qf1_loss + qf2_loss
 
-            self.c_optim.zero_grad()
             critic_loss.backward()
             self.c_optim.step()
 
@@ -328,7 +350,6 @@ class Brain():
             
             policy_loss = ((self.alpha * log_pi) - min_qf_pi).mean()
 
-            self.a_optim.zero_grad()
             policy_loss.backward()
             self.a_optim.step()
 
@@ -336,7 +357,6 @@ class Brain():
             # Atualização do Alpha (Temperatura)
             # ========================
             alpha_loss = -(self.log_alpha * (log_pi + self.target_entropy).detach()).mean()
-            self.alpha_optim.zero_grad()
             alpha_loss.backward()
             self.alpha_optim.step()
             self.alpha = self.log_alpha.exp().item()
@@ -348,7 +368,15 @@ class Brain():
                 target_param.data.copy_(self.args.tau * param.data + (1 - self.args.tau) * target_param.data)
 
 
-        
+            # Reconstruir no espaço latente, computar a loss de reconstrução, otimizar e salvar o resultado
+            reconstructed_state = self.feature_decoder(features_state.detach())
+            reconstruction_loss = self.mse_loss(reconstructed_state, states)
+            reconstruction_loss.backward()
+            self.decoder_optim.step()
+
+            print(f"Loss da reconstrucao do latente: {reconstruction_loss.item():.4f}")
+
+
         self.reward = 0. # Reseta o reforço para a próxima iteração
 
         return self.last_action.cpu().numpy()
