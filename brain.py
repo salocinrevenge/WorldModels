@@ -6,6 +6,7 @@ import torch.optim as optim
 from torch.distributions import Normal
 from collections import deque
 import random
+import os
 
 class ReplayBuffer:
     def __init__(self, capacity):
@@ -124,7 +125,7 @@ class FeatureExtractor(nn.Module):
 
 class ConfigArgs:
     beta = 0.2
-    eta = 100.0 # Scale factor for intrinsic reward
+    eta = 500.0 # Scale factor for intrinsic reward
     discounted_factor = 0.99
     lr = 3e-4 # Taxa de aprendizado padrão do SAC para todas as redes
     batch_size = 256
@@ -133,10 +134,12 @@ class ConfigArgs:
     alpha_init = 0.2 # Temperatura inicial
 
 class Brain():
-    def __init__(self, robo, num_actions):
+    def __init__(self, robo, num_actions, path_to_save_models=None, len_moving_average=100):
         self.Robo = robo
         self.args = ConfigArgs()
         self.num_actions = num_actions
+        self.path_to_save_models = path_to_save_models
+        os.makedirs(self.path_to_save_models, exist_ok=True) # Garante que o diretório para salvar os modelos exista
 
         self.total_reward = 0.0
         self.reconstruction_loss = 0.0 
@@ -147,10 +150,22 @@ class Brain():
         self.last_state = None
         self.last_action = None # Agora guardamos a última ação contínua
         
-        self.reforco = 0. 
+        self.reward = 0. 
         self.need_to_initialize_models = True
         
         self.memory = ReplayBuffer(self.args.buffer_capacity)
+        self.n_steps_until_save = self.args.batch_size * 3 # Salva os modelos a cada 3 batches completos
+        self.warm_up_steps = 2000 # Número de etapas para aquecer o buffer de replay
+        self.get_moving_average_reward_window = deque(maxlen=len_moving_average) # Janela para calcular a média móvel da recompensa
+
+    def save_models(self):
+        if self.path_to_save_models is not None:
+            torch.save(self.actor.state_dict(), f"{self.path_to_save_models}actor.pth")
+            torch.save(self.critic.state_dict(), f"{self.path_to_save_models}critic.pth")
+            torch.save(self.feature_extractor.state_dict(), f"{self.path_to_save_models}feature_extractor.pth")
+            torch.save(self.forward_model.state_dict(), f"{self.path_to_save_models}forward_model.pth")
+            torch.save(self.inverse_model.state_dict(), f"{self.path_to_save_models}inverse_model.pth")
+            print(f"Modelos salvos com sucesso em {self.path_to_save_models}!")
 
     def initialize_models(self, input_length):
         hidden_dims = 128 # Aumentado para lidar melhor com o espaço contínuo
@@ -164,6 +179,19 @@ class Brain():
         self.feature_extractor = FeatureExtractor(input_length, hidden_dims)
         self.forward_model = ForwardModel(self.num_actions, hidden_dims)
         self.inverse_model = InverseModel(self.num_actions, hidden_dims)
+
+        # load if available
+        if self.path_to_save_models is not None:
+            try:
+                self.actor.load_state_dict(torch.load(f"{self.path_to_save_models}actor.pth"))
+                self.critic.load_state_dict(torch.load(f"{self.path_to_save_models}critic.pth"))
+                self.critic_target.load_state_dict(self.critic.state_dict())
+                self.feature_extractor.load_state_dict(torch.load(f"{self.path_to_save_models}feature_extractor.pth"))
+                self.forward_model.load_state_dict(torch.load(f"{self.path_to_save_models}forward_model.pth"))
+                self.inverse_model.load_state_dict(torch.load(f"{self.path_to_save_models}inverse_model.pth"))
+                print(f"Modelos carregados com sucesso de {self.path_to_save_models}!")
+            except FileNotFoundError:
+                print(f"Modelos não encontrados em {self.path_to_save_models}, iniciando do zero.")
 
         # Optimizers
         self.a_optim = optim.Adam(self.actor.parameters(), lr=self.args.lr)
@@ -195,11 +223,16 @@ class Brain():
         if sensor_name not in self.sensors_names:
             self.sensors_names.append(sensor_name)
 
-    def set_reforco(self, reforco):
-        self.reforco = reforco
+    def add_reward(self, reward):
+        self.reward += reward
 
     def get_total_reward(self):
         return self.total_reward
+
+    def get_moving_average_reward(self, window_size=100):
+        if len(self.get_moving_average_reward_window) == 0:
+            return 0.0
+        return sum(self.get_moving_average_reward_window) / len(self.get_moving_average_reward_window)
     
     def get_reconstruction_loss(self):
         return self.reconstruction_loss
@@ -217,12 +250,17 @@ class Brain():
 
     def update(self):
         self.get_state()
+        self.n_steps_until_save -= 1
+        if self.n_steps_until_save <= 0:
+            self.save_models()
+            self.n_steps_until_save = self.args.batch_size * 10
 
         # Coleta de experiências online
         if self.last_state is not None and self.last_action is not None:
             # Calcula a recompensa intrínseca na hora para armazenar no buffer
             r_int = self.compute_intrinsic_reward(self.last_state, self.last_action, self.current_state)
-            self.total_reward = self.reforco + r_int
+            self.total_reward = self.reward + r_int
+            self.get_moving_average_reward_window.append(self.total_reward)
             
             self.memory.push(self.last_state.detach(), 
                              self.last_action.detach(), 
@@ -231,9 +269,14 @@ class Brain():
 
         # Seleciona nova ação para o ambiente usando o Ator
         with torch.no_grad():
-            action, _, _ = self.actor.sample(self.current_state.unsqueeze(0))
+            # Warm-up: Exploração 100% caótica nos primeiros 2000 passos
+            if len(self.memory) < self.warm_up_steps:
+                # Gera uma ação aleatória entre -1 e 1
+                action = torch.rand(1, self.num_actions) * 2.0 - 1.0 
+            else:
+                action, _, _ = self.actor.sample(self.current_state.unsqueeze(0))
+            
             self.last_action = action.squeeze(0)
-
         # Treinamento com Batch
         if len(self.memory) > self.args.batch_size:
             states, actions, rewards, next_states = self.memory.sample(self.args.batch_size)
@@ -303,5 +346,9 @@ class Brain():
             # ========================
             for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
                 target_param.data.copy_(self.args.tau * param.data + (1 - self.args.tau) * target_param.data)
+
+
+        
+        self.reward = 0. # Reseta o reforço para a próxima iteração
 
         return self.last_action.cpu().numpy()

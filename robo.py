@@ -9,10 +9,11 @@ import os
 from brain import Brain
 
 class Robo():
-    def __init__(self, world=None):
+    def __init__(self, world=None, path_to_save_models = None):
         self.pos = rl.Vector2(500, 500)
         self.pos_alvo = rl.Vector2(500, 500)
         self.vel = rl.Vector2(0, 0)
+        self.path_to_save_models = path_to_save_models
         self.acc = rl.Vector2(0, 0)
         self.atrito = 0.1
         self.limiar_atrito = 0.01
@@ -32,8 +33,8 @@ class Robo():
         self.tipos_controle = ["absoluto", "rotacional", "rodas"]
         self.controle_atual = 2
 
-        self.tipos_sensores = ["visao", "tato", "acc", "gyro"]
-        self.sensores_ativos = [True, True, True, True]
+        self.tipos_sensores = ["visao", "tato", "acc", "gyro", "gps"]
+        self.sensores_ativos = [True, True, True, True, True]
         self.tato = {"N": 0, "S": 0, "E": 0, "W": 0}
         self.ordem_tato = ["N", "S", "E", "W"]
 
@@ -53,9 +54,12 @@ class Robo():
         self.last_pos = [rl.Vector2(self.pos.x, self.pos.y), rl.Vector2(self.pos.x, self.pos.y), rl.Vector2(self.pos.x, self.pos.y)]
         self.last_angulo = [self.angulo, self.angulo]
 
-        self.brain = Brain(self, num_actions=2)
+        self.brain = Brain(self, num_actions=2, path_to_save_models=self.path_to_save_models)
         self.create_encoders()
         self.autonomous = True # Se True, o robô é controlado pelo cérebro, se False, é controlado pelo usuário
+        self.recompensas_terreno = {"G": 1, "B": -10}
+        self.limiar_dor = 5 # Se o tato for maior que isso, recebe recompensa negativa igual a quanto ele está mais que o limiar
+        self.last_action = None
 
     def create_encoders(self):
 
@@ -97,7 +101,8 @@ class Robo():
             "visao": MobileEncoder(),
             "tato": IdentityEncoder(ordem=self.ordem_tato),
             "acc": IdentityEncoder(),
-            "gyro": IdentityEncoder()
+            "gyro": IdentityEncoder(),
+            "gps": IdentityEncoder()
         }
         
 
@@ -107,6 +112,7 @@ class Robo():
 
                 if self.autonomous:
                     brain_output = self.brain.update()
+                    self.last_action = brain_output
                     self.acc.x = brain_output[0].item() * self.acc_max
                     self.acc.y = brain_output[1].item() * self.acc_max
                     
@@ -133,6 +139,7 @@ class Robo():
             case "rotacional":
                 if self.autonomous:
                     brain_output = self.brain.update()
+                    self.last_action = brain_output
                     self.acc.x = self.acc_max * math.cos(self.angulo) * brain_output[0].item()
                     self.acc.y = self.acc_max * math.sin(self.angulo) * brain_output[0].item()
                     self.acc_angular = brain_output[1].item() * self.acc_max_angular
@@ -163,6 +170,7 @@ class Robo():
             case "rodas":
                 if self.autonomous:
                     brain_output = self.brain.update()
+                    self.last_action = brain_output
                     acc_roda_esquerda = brain_output[0].item() * self.acc_max
                     acc_roda_direita = brain_output[1].item() * self.acc_max
                 else:
@@ -211,6 +219,13 @@ class Robo():
         self.last_pos.pop(0)
         self.last_pos.append(rl.Vector2(self.pos.x, self.pos.y))
 
+        # Reforcos
+        for type_rew in self.recompensas_terreno.keys():
+            # print("Hoi")
+            if self.world.test_robot_colision_with_terrain(self.raio, self.pos, type_rew)[0]:
+                self.brain.add_reward(self.recompensas_terreno[type_rew])
+                # print(f"Recompensa: {self.recompensas_terreno[type_rew]} | Total: {self.brain.get_total_reward():.2f}")
+
         # Aplica atrito para reduzir a velocidade ao longo do tempo
         self.vel.x *= (1 - self.atrito)
         self.vel.y *= (1 - self.atrito)
@@ -247,9 +262,17 @@ class Robo():
         if self.sensores_ativos[self.tipos_sensores.index("gyro")]:
             self.sensor_gyroscope()
 
+        if self.sensores_ativos[self.tipos_sensores.index("gps")]:
+            self.sensor_gps()
+
         self.controles()
-        print(f" Reconstruction Loss: {self.brain.get_reconstruction_loss()} | Total Reward: {self.brain.get_total_reward()}") # Imprime a perda de reconstrução e a recompensa total para monitorar o desempenho do agente e do modelo de mundo ao longo do tempo
+        if self.brain.get_reconstruction_loss() is not None and self.brain.get_total_reward() is not None:
+            print(f" Reconstruction Loss: {self.brain.get_reconstruction_loss():.4f} | Total Reward: {self.brain.get_total_reward():.4f}") # Imprime a perda de reconstrução e a recompensa total para monitorar o desempenho do agente e do modelo de mundo ao longo do tempo
         self.phisics(dt)
+
+    def sensor_gps(self):
+        self.brain.set_info_sensor(self.pos, "gps", encoder=self.encoders["gps"])
+        return self.pos
 
     def sensor_accelerometer(self):
         # Simula o sensor de aceleração
@@ -270,6 +293,8 @@ class Robo():
         # Detecta para cada 
         self.tato = self.world.test_robot_colision_with_terrain(self.raio_tato, self.pos_alvo)[1]
         self.brain.set_info_sensor(self.tato, "tato", encoder=self.encoders["tato"])
+        if max(self.tato.values()) > self.limiar_dor:
+            self.brain.add_reward(- (max(self.tato.values()) - self.limiar_dor)) # Recompensa negativa proporcional a quanto o tato ultrapassa o limiar de dor
         return self.tato
 
     def sensor_visao(self):

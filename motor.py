@@ -10,7 +10,7 @@ class Motor():
         # Criar a janela
         rl.set_config_flags(rl.FLAG_WINDOW_RESIZABLE) # Permite redimensionar a janela
         rl.set_trace_log_level(rl.LOG_NONE) # Desativa os logs do raylib, para evitar poluição no console
-        self.WINDOW_WIDTH = 1000
+        self.WINDOW_WIDTH = 1400
         self.WINDOW_HEIGHT = 1000
         self.RENDER_ASPECT = self.WINDOW_WIDTH / self.WINDOW_HEIGHT
         rl.init_window(self.WINDOW_WIDTH, self.WINDOW_HEIGHT, b"World Model")

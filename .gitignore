@@ -1,3 +1,4 @@
 capturas_visao/
 *__pycache__/
 *.venv/
+cerebro/

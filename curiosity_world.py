@@ -1,3 +1,5 @@
+import math
+
 from robo import Robo
 
 import pyray as rl
@@ -6,11 +8,17 @@ class Curiosity_world():
     def __init__(self, handler):
         self.handler = handler
         self.terreno = self.build_world() # Lista de objetos do terreno
-        self.agente = Robo(self) # Agente do mundo, para interagir com o ambiente
+        self.agente = Robo(self, "cerebro/") # Agente do mundo, para interagir com o ambiente
         self.escala = 50
+        self.ticks = 0
+        self.tempo_simulacao = 256011
 
     def update(self, dt):
         self.agente.update(dt)
+        self.ticks += 1
+        if self.ticks >= self.tempo_simulacao:
+            self.ticks = 0
+            self.agente = Robo(self, "cerebro/") # Reinicia o agente para testar o aprendizado ao longo do tempo
 
     def render_terreno(self):
         for i, linha in enumerate(self.terreno):
@@ -26,17 +34,41 @@ class Curiosity_world():
                         # Renderizar um obstáculo: quadrado azul
                         rl.draw_rectangle(j * self.escala, i * self.escala, self.escala, self.escala, rl.RED)
                     case "C":
-                        # Renderizar um obstáculo: quadrado azul
-                        rl.draw_rectangle(j * self.escala, i * self.escala, self.escala, self.escala, rl.YELLOW)
+                        # Renderizar uma haste rotacionando e mudando de cor
+                        rl.draw_rectangle(j * self.escala, i * self.escala, self.escala, self.escala, rl.GRAY)
+                        # DrawLineEx(Vector2 startPos, Vector2 endPos, float thick, Color color); 
+                        start_pos = rl.Vector2(j * self.escala + self.escala // 2 - self.escala//2 * math.cos(self.ticks * 0.05), i * self.escala + self.escala // 2 - self.escala//2 * math.sin(self.ticks * 0.05))     
+                        end_pos = rl.Vector2(j * self.escala + self.escala // 2 + self.escala//2 * math.cos(self.ticks * 0.05), i * self.escala + self.escala // 2 + self.escala//2 * math.sin(self.ticks * 0.05))
+                        color = rl.Color(255, int(127 + 127 * math.sin(self.ticks * 0.1)), int(127 - 127 * math.sin(self.ticks * 0.1)), 255)
+                        rl.draw_line_ex(start_pos, end_pos, 5.0, color)
+
                     case ".":
                         # Renderizar um chão vazio: quadrado cinza
                         rl.draw_rectangle(j * self.escala, i * self.escala, self.escala, self.escala, rl.GRAY)
 
+    def render_hud(self):
+        # Renderizar o HUD, com informações sobre o agente, como posição, velocidade, recompensa acumulada, etc.
+        rl.draw_text(f"Posição: ({self.agente.pos.x:.2f}, {self.agente.pos.y:.2f})", 1010, 10, 20, rl.WHITE)
+        rl.draw_text(f"Velocidade: ({self.agente.vel.x:.2f}, {self.agente.vel.y:.2f})", 1010, 40, 20, rl.WHITE)
+        rl.draw_text(f"Aceleração: ({self.agente.acc.x:.2f}, {self.agente.acc.y:.2f})", 1010, 70, 20, rl.WHITE)
+        rl.draw_text(f"Recompensa acumulada (média): {self.agente.brain.get_moving_average_reward():.2f}", 1010, 100, 20, rl.WHITE)
+        if self.agente.last_action is not None:
+            # Ao invés de texto, colocar duas barras verticais cinzas, uma para cada ação, com altura proporcional ao valor da ação, e um número indicando o valor da ação
+            # Ela pode variar de -1 a 1, então a barra deve ser centralizada em 0, com altura máxima de 50 pixels. se 1, 25 para cima, se -1, 25 para baixo, com valores intermediario. Uma linha branca deve estar no fim da barra
+            rl.draw_text(f"Última ação: ({self.agente.last_action[0].item():.2f}, {self.agente.last_action[1].item():.2f})", 1010, 130, 20, rl.WHITE)
+            rl.draw_rectangle(1270, 125, 20, 50, rl.GRAY)
+            rl.draw_rectangle(1270, 150-max(int(self.agente.last_action[0].item() * 25), 0), 20, abs(int(self.agente.last_action[0].item() * 25)), rl.BLUE)
+            rl.draw_rectangle(1300, 125, 20, 50, rl.GRAY)
+            rl.draw_rectangle(1300, 150-max(int(self.agente.last_action[1].item() * 25), 0), 20, abs(int(self.agente.last_action[1].item() * 25)), rl.BLUE)
+        if len(self.agente.brain.memory) < self.agente.brain.warm_up_steps:
+            rl.draw_text(f"WARM UP: {len(self.agente.brain.memory)}/{self.agente.brain.warm_up_steps}", 1010, 175, 20, rl.RED)
+
     def render(self):
         self.render_terreno()
         self.agente.render()
+        self.render_hud()
 
-    def test_robot_colision_with_terrain(self, raio, pos_alvo):
+    def test_robot_colision_with_terrain(self, raio, pos_alvo, caracter = "#"):
         # Testa se a posição alvo do robô colide com o terreno, retornando True se não colidir e False se colidir
         # Para isso, vamos verificar os quatro cantos do robô, considerando seu raio, para ver se algum deles colide com um obstáculo
         colisions = {"N": 0, "S": 0, "E": 0, "W": 0}
@@ -49,7 +81,7 @@ class Curiosity_world():
                     continue
                 x = int((pos_alvo.x + i * raio) // self.escala)
                 y = int((pos_alvo.y + j * raio) // self.escala)
-                if self.terreno[y][x] == "#":
+                if self.terreno[y][x] == caracter:
                     # salva quanto cada sensor foi penetrado no obstáculo
                     # Computa com base no lado a ser penetrado. Se é esqueda, é o quanto o x do robô ultrapassa o limite direito do obstáculo, se é direita, é o quanto o x do robô ultrapassa o limite esquerdo do obstáculo, se é cima, é o quanto o y do robô ultrapassa o limite inferior do obstáculo, se é baixo, é o quanto o y do robô ultrapassa o limite superior do obstáculo
                     penetracao = 0
