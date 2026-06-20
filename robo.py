@@ -30,7 +30,7 @@ class Robo():
         self.raio_tato = 30
 
         self.tipos_controle = ["absoluto", "rotacional", "rodas"]
-        self.controle_atual = 1
+        self.controle_atual = 2
 
         self.tipos_sensores = ["visao", "tato", "acc", "gyro"]
         self.sensores_ativos = [True, True, True, True]
@@ -53,7 +53,7 @@ class Robo():
         self.last_pos = [rl.Vector2(self.pos.x, self.pos.y), rl.Vector2(self.pos.x, self.pos.y), rl.Vector2(self.pos.x, self.pos.y)]
         self.last_angulo = [self.angulo, self.angulo]
 
-        self.brain = Brain(self, num_actions=5)
+        self.brain = Brain(self, num_actions=2)
         self.create_encoders()
         self.autonomous = True # Se True, o robô é controlado pelo cérebro, se False, é controlado pelo usuário
 
@@ -102,28 +102,15 @@ class Robo():
         
 
     def controles(self):
-        if self.autonomous:
-            brain_output = self.brain.update()
-            match brain_output:
-                case 0: # Mover para a direita
-                    self.acc.x = self.acc_max
-                    self.acc.y = 0
-                case 1: # Mover para a esquerda
-                    self.acc.x = -self.acc_max
-                    self.acc.y = 0
-                case 2: # Mover para baixo
-                    self.acc.x = 0
-                    self.acc.y = self.acc_max
-                case 3: # Mover para cima
-                    self.acc.x = 0
-                    self.acc.y = -self.acc_max
-                case 4: # Parar
-                    self.acc.x = 0
-                    self.acc.y = 0
-        else:
-            match self.tipos_controle[self.controle_atual]:
-                case "absoluto":
+        match self.tipos_controle[self.controle_atual]:
+            case "absoluto":
 
+                if self.autonomous:
+                    brain_output = self.brain.update()
+                    self.acc.x = brain_output[0].item() * self.acc_max
+                    self.acc.y = brain_output[1].item() * self.acc_max
+                    
+                else:
                     # Se precionar as setas, o robô se move na direção correspondente
                     if (rl.is_key_down(rl.KEY_RIGHT) or rl.is_key_down(rl.KEY_D)) and (rl.is_key_down(rl.KEY_LEFT) or rl.is_key_down(rl.KEY_A)):
                         self.acc.x = 0
@@ -143,7 +130,13 @@ class Robo():
                     else:            
                         self.acc.y = 0
 
-                case "rotacional":
+            case "rotacional":
+                if self.autonomous:
+                    brain_output = self.brain.update()
+                    self.acc.x = self.acc_max * math.cos(self.angulo) * brain_output[0].item()
+                    self.acc.y = self.acc_max * math.sin(self.angulo) * brain_output[0].item()
+                    self.acc_angular = brain_output[1].item() * self.acc_max_angular
+                else:
                     # Setas para os lados rotacionam o robô, setas para cima e para baixo movem o robô para frente e para trás na direção que ele está virado
                     if (rl.is_key_down(rl.KEY_RIGHT) or rl.is_key_down(rl.KEY_D)) and (rl.is_key_down(rl.KEY_LEFT) or rl.is_key_down(rl.KEY_A)):
                         self.acc_angular = 0
@@ -167,7 +160,12 @@ class Robo():
                         self.acc.x = 0
                         self.acc.y = 0
 
-                case "rodas":
+            case "rodas":
+                if self.autonomous:
+                    brain_output = self.brain.update()
+                    acc_roda_esquerda = brain_output[0].item() * self.acc_max
+                    acc_roda_direita = brain_output[1].item() * self.acc_max
+                else:
                     # Usa seta cima e baixo para controlar a roda direita, e W e S para controlar a roda esquerda, o robô se move na direção correspondente a diferença de velocidade entre as rodas
                     if (rl.is_key_down(rl.KEY_W)) and (rl.is_key_down(rl.KEY_S)):
                         acc_roda_esquerda = 0
@@ -187,9 +185,9 @@ class Robo():
                     else:
                         acc_roda_direita = 0
 
-                    self.acc.x = (acc_roda_esquerda + acc_roda_direita) * math.cos(self.angulo) / 2
-                    self.acc.y = (acc_roda_esquerda + acc_roda_direita) * math.sin(self.angulo) / 2
-                    self.acc_angular = (acc_roda_direita - acc_roda_esquerda) * self.acc_max_angular
+                self.acc.x = (acc_roda_esquerda + acc_roda_direita) * math.cos(self.angulo) / 2
+                self.acc.y = (acc_roda_esquerda + acc_roda_direita) * math.sin(self.angulo) / 2
+                self.acc_angular = (acc_roda_direita - acc_roda_esquerda) * self.acc_max_angular
 
 
 
