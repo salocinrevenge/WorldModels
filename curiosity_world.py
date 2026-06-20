@@ -19,6 +19,15 @@ class Curiosity_world():
                     case "#":
                         # Renderizar um obstáculo: quadrado azul
                         rl.draw_rectangle(j * self.escala, i * self.escala, self.escala, self.escala, rl.BLUE)
+                    case "G":
+                        # Renderizar um obstáculo: quadrado azul
+                        rl.draw_rectangle(j * self.escala, i * self.escala, self.escala, self.escala, rl.GREEN)
+                    case "B":
+                        # Renderizar um obstáculo: quadrado azul
+                        rl.draw_rectangle(j * self.escala, i * self.escala, self.escala, self.escala, rl.RED)
+                    case "C":
+                        # Renderizar um obstáculo: quadrado azul
+                        rl.draw_rectangle(j * self.escala, i * self.escala, self.escala, self.escala, rl.YELLOW)
                     case ".":
                         # Renderizar um chão vazio: quadrado cinza
                         rl.draw_rectangle(j * self.escala, i * self.escala, self.escala, self.escala, rl.GRAY)
