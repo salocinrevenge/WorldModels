@@ -40,7 +40,7 @@ class Actor(nn.Module):
     def forward(self, state):
         x = self.feature_extractor(state)
         mean = self.mean_linear(x)
-        log_std = self.log_std_linear(x)
+        log_std = self.log_std_linear(x) # log pois é mais estável para otimização, a rede pode usar negativos
         log_std = torch.clamp(log_std, min=-20, max=2) # Evita gradientes explosivos
         return mean, log_std
 
@@ -48,13 +48,13 @@ class Actor(nn.Module):
         mean, log_std = self.forward(state)
         std = log_std.exp()
         normal = Normal(mean, std)
-        x_t = normal.rsample()  # Reparameterization trick
+        x_t = normal.rsample()  # Reparameterization trick, para poder calcular gradientes
         y_t = torch.tanh(x_t)
-        action = y_t * self.action_scale + self.action_bias
-        log_prob = normal.log_prob(x_t)
+        action = y_t * self.action_scale + self.action_bias # de -1 a 1 para o intervalo de ação real (-1 a 1 msm, n muda)
+        log_prob = normal.log_prob(x_t) # Energy
         
         # Enforcing Action Bound (correção de probabilidade devido ao tanh)
-        log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + 1e-6)
+        log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + 1e-6) # corrige valores expremidos em -1 ou 1
         log_prob = log_prob.sum(-1, keepdim=True)
         mean = torch.tanh(mean) * self.action_scale + self.action_bias
         return action, log_prob, mean
@@ -160,6 +160,7 @@ class Brain():
         
         self.current_state = None 
         self.last_state = None
+        self.current_action = None
         self.last_action = None # Agora guardamos a última ação contínua
         
         self.reward = 0. 
@@ -169,6 +170,8 @@ class Brain():
         self.n_steps_until_save = self.args.batch_size * 3 # Salva os modelos a cada 3 batches completos
         self.warm_up_steps = 256 # Número de etapas para aquecer o buffer de replay
         self.get_moving_average_reward_window = deque(maxlen=len_moving_average) # Janela para calcular a média móvel da recompensa
+        self.latent_reconstructed = None
+        self.individual_shapes = None
 
     def save_models(self):
         if self.path_to_save_models is not None:
@@ -225,13 +228,27 @@ class Brain():
         self.mse_loss = nn.MSELoss()
 
     def get_state(self):
-        self.last_state = self.current_state 
+        self.last_state = self.current_state
+        self.individual_shapes = [info.shape[0] for info in self.sensors_latent_info.values()]
         state_tensors = [self.sensors_latent_info[name] for name in self.sensors_names]
         self.current_state = torch.cat(state_tensors).flatten()
 
         if self.need_to_initialize_models:
             self.initialize_models(input_length=self.current_state.shape[0])
             self.need_to_initialize_models = False
+
+    def separate_state_by_sensor(self, state):
+        # Método para separar o estado concatenado em partes correspondentes a cada sensor, baseado na ordem definida em self.sensors_names e nas formas armazenadas em self.individual_shapes
+        separated_info = {}
+        idx = 0
+        print(state.shape)
+        for name in self.sensors_names:
+            length = self.individual_shapes[self.sensors_names.index(name)]
+            print(f"Separando estado para sensor '{name}' com shape {length} a partir do índice {idx}")
+            separated_info[name] = state[idx:idx+length]
+            idx += length
+
+        return separated_info
 
     def set_info_sensor(self, info, sensor_name, encoder):
         latent_info = encoder(info)
@@ -262,12 +279,14 @@ class Brain():
             est_next_features = self.forward_model(action.unsqueeze(0), features[0:1])
             forward_loss = self.mse_loss(est_next_features, features[1:2])
             
-        return self.args.eta * forward_loss.item()
+        return self.args.eta * forward_loss.item(), est_next_features.detach(), features[1:2].detach()
 
     def update(self):
         
         self.get_state()
         self.n_steps_until_save -= 1
+
+        self.last_action = self.current_action
 
         self.icm_optim.zero_grad()
         self.c_optim.zero_grad()
@@ -275,14 +294,16 @@ class Brain():
         self.alpha_optim.zero_grad()
         self.decoder_optim.zero_grad()
 
+
         if self.n_steps_until_save <= 0:
             self.save_models()
             self.n_steps_until_save = self.args.batch_size * 10
 
         # Coleta de experiências online
+        features_current_state = None
         if self.last_state is not None and self.last_action is not None:
             # Calcula a recompensa intrínseca na hora para armazenar no buffer
-            r_int = self.compute_intrinsic_reward(self.last_state, self.last_action, self.current_state)
+            r_int, est_current_features, features_current_state = self.compute_intrinsic_reward(self.last_state, self.last_action, self.current_state)
             self.total_reward = self.reward + r_int
             self.get_moving_average_reward_window.append(self.total_reward)
             
@@ -293,14 +314,15 @@ class Brain():
 
         # Seleciona nova ação para o ambiente usando o Ator
         with torch.no_grad():
-            # Warm-up: Exploração 100% caótica nos primeiros 2000 passos
+            # Warm-up: Exploração 100% caótica nos primeiros passos
             if len(self.memory) < self.warm_up_steps:
                 # Gera uma ação aleatória entre -1 e 1
                 action = torch.rand(1, self.num_actions) * 2.0 - 1.0 
             else:
                 action, _, _ = self.actor.sample(self.current_state.unsqueeze(0))
             
-            self.last_action = action.squeeze(0)
+            self.current_action = action.squeeze(0)
+
         # Treinamento com Batch
         if len(self.memory) > self.args.batch_size:
             states, actions, rewards, next_states = self.memory.sample(self.args.batch_size)
@@ -328,10 +350,10 @@ class Brain():
             # Treinamento do SAC Crítico
             # ========================
             with torch.no_grad():
-                next_state_actions, next_state_log_pi, _ = self.actor.sample(next_states)
-                qf1_next_target, qf2_next_target = self.critic_target(next_states, next_state_actions)
-                min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - self.alpha * next_state_log_pi
-                next_q_value = rewards + self.args.discounted_factor * (min_qf_next_target)
+                next_state_actions, next_state_log_pi, _ = self.actor.sample(next_states) # gera uma acao com o ator de hoje
+                qf1_next_target, qf2_next_target = self.critic_target(next_states, next_state_actions) # encontra dois valores de estado
+                min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - self.alpha * next_state_log_pi # min_qf_next_target significa o valor do estado futuro, corrigido pela entropia (incentivo à exploração, "deixa ele brincar")
+                next_q_value = rewards + self.args.discounted_factor * (min_qf_next_target) 
 
             qf1, qf2 = self.critic(states, actions)
             qf1_loss = self.mse_loss(qf1, next_q_value)
@@ -368,15 +390,21 @@ class Brain():
                 target_param.data.copy_(self.args.tau * param.data + (1 - self.args.tau) * target_param.data)
 
 
-            # Reconstruir no espaço latente, computar a loss de reconstrução, otimizar e salvar o resultado
-            reconstructed_state = self.feature_decoder(features_state.detach())
-            reconstruction_loss = self.mse_loss(reconstructed_state, states)
+
+        # Reconstruir no espaço latente, computar a loss de reconstrução, otimizar e salvar o resultado
+        # r_int, est_current_features, features_current_state
+        self.latent_reconstructed = None
+        if features_current_state is not None:
+            reconstructed_state = self.feature_decoder(features_current_state)
+            reconstruction_loss = self.mse_loss(reconstructed_state, self.current_state)
             reconstruction_loss.backward()
             self.decoder_optim.step()
+
+            self.latent_reconstructed = reconstructed_state.detach()
 
             print(f"Loss da reconstrucao do latente: {reconstruction_loss.item():.4f}")
 
 
         self.reward = 0. # Reseta o reforço para a próxima iteração
 
-        return self.last_action.cpu().numpy()
+        return self.current_action.cpu().numpy()

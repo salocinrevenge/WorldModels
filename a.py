@@ -217,3 +217,48 @@ class Brain():
             avg_ireward_lst.append(avg_intrinsic_reward)
             mva_lst.append(mva)
             print('Episodes: {}, AVG Score: {:.3f}, Score: {} AVG reward i: {:.6f}'.format(n_eps, mva, score, avg_intrinsic_reward))
+
+
+
+import torch
+from diffusers import AutoencoderKL
+
+# 1. Carrega o modelo pré-treinado
+vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").eval()
+
+# Simulação da sua imagem original [Batch, Canais, Altura, Largura] na escala 0-255
+# (Certifique-se de que o tipo seja float para as operações matemáticas)
+imagem_0_255 = torch.randint(0, 256, (1, 3, 160, 160)).float()
+
+# ========================================================
+# PREPARAÇÃO (0 a 255  --->  -1 a 1)
+# ========================================================
+imagem_normalizada = (imagem_0_255 / 255.0) * 2.0 - 1.0
+
+
+with torch.no_grad():
+    # --- CODIFICA ---
+    latente_2d = vae.encode(imagem_normalizada).latent_dist.mode()
+    print("Shape do Espaço Latente 2D:", latente_2d.shape) # [1, 4, 20, 20]
+
+    # --- DECODIFICA ---
+    imagem_reconstruida = vae.decode(latente_2d).sample
+
+
+# ========================================================
+# PÓS-PROCESSAMENTO (-1 a 1  --->  0 a 255)
+# ========================================================
+# 1. Volta para a escala 0 a 1
+imagem_final = (imagem_reconstruida + 1.0) / 2.0
+
+# 2. Corta valores que saíram levemente do limite devido a dízimas decimais
+imagem_final = torch.clamp(imagem_final, 0.0, 1.0)
+
+# 3. Volta para a escala 0 a 255
+imagem_final_255 = imagem_final * 255.0
+
+# 4. Opcional: Se precisar salvar ou usar no OpenCV, converta de volta para inteiros
+imagem_final_255 = imagem_final_255.to(torch.uint8)
+
+print("Shape final:", imagem_final_255.shape) # [1, 3, 160, 160]
+print("Valores mínimos e máximos reais:", imagem_final_255.min().item(), "a", imagem_final_255.max().item())

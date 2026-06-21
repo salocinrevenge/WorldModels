@@ -64,6 +64,10 @@ class Curiosity_world():
         if len(self.agente.brain.memory) < self.agente.brain.warm_up_steps:
             rl.draw_text(f"WARM UP: {len(self.agente.brain.memory)}/{self.agente.brain.warm_up_steps}", 1010, 185, 20, rl.RED)
 
+        # Renderizar a imagem reconstruída, se disponível
+        if self.agente.imagem_reconstruida is not None:
+            rl.draw_texture(rl.load_texture_from_image(rl.Image(self.agente.imagem_reconstruida.astype("uint8"))), 1010, 210, rl.WHITE)
+
     def render(self):
         self.render_terreno()
         self.agente.render()

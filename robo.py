@@ -3,6 +3,7 @@ import math
 import pyray as rl
 import numpy as np
 import torch
+from diffusers import AutoencoderKL
 import torchvision.models as models
 import os
 
@@ -60,14 +61,14 @@ class Robo():
         self.recompensas_terreno = {"G": 1, "B": -10}
         self.limiar_dor = 5 # Se o tato for maior que isso, recebe recompensa negativa igual a quanto ele está mais que o limiar
         self.last_action = None
+        self.imagem_reconstruida = None
 
     def create_encoders(self):
 
-        class MobileEncoder: # Só vou usar isso aqui, acho q ta ok
+        class Vae: # Só vou usar isso aqui, acho q ta ok
             def __init__(self):
-                self.model = models.mobilenet_v3_large(weights=models.MobileNet_V3_Large_Weights.DEFAULT)
-                self.feature_extractor = self.model.features
-                self.avgpool = self.model.avgpool
+                self.model = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").eval()
+                self.last_format = None
 
             def __call__(self, x):
                 with torch.no_grad():
@@ -77,9 +78,22 @@ class Robo():
                             x = x[0:3, :, :]
                         # Adiciona uma dimensão de batch
                         x = x.unsqueeze(0)
-                    x = self.feature_extractor(x)
-                    latent_space = torch.squeeze(self.avgpool(x))
+                    x = x * 2.0 - 1.0 # Normaliza para o intervalo [-1, 1], que é o esperado pelo modelo
+                    x = self.model.encode(x).latent_dist.mode()
+                    # deixa tudo unidimensional
+                    self.last_format = x.shape
+                    x = x.view(x.size(0), -1)
+                    latent_space = torch.squeeze(x)
                 return latent_space
+            
+            def decode(self, latent_vector):
+                with torch.no_grad():
+                    # Reconstrói a imagem a partir do vetor latente
+                    reshaped = latent_vector.view(self.last_format) # Restaura a forma original antes de decodificar
+                    reconstructed = self.model.decode(reshaped).sample
+                    # Desnormaliza para o intervalo [0, 1]
+                    reconstructed = (reconstructed + 1.0) / 2.0
+                return reconstructed
 
         class IdentityEncoder:
             def __init__(self, ordem = None):
@@ -98,7 +112,7 @@ class Robo():
                 return torch.tensor([x]) # Converte para tensor, caso não seja nenhum dos tipos acima
 
         self.encoders = {
-            "visao": MobileEncoder(),
+            "visao": Vae(),
             "tato": IdentityEncoder(ordem=self.ordem_tato),
             "acc": IdentityEncoder(),
             "gyro": IdentityEncoder(),
@@ -246,6 +260,21 @@ class Robo():
         if self.vel_angular < self.limiar_atrito_angular and self.vel_angular > -self.limiar_atrito_angular:
             self.vel_angular = 0        
 
+    def get_reconstructed_state(self):
+        # Retorna um estado reconstruído a partir do espaço latente, para monitorar o desempenho do modelo de mundo
+        if self.brain.latent_reconstructed is None:
+            return None
+        
+        
+        # Extrai os sensores originais do estado reconstruído, assumindo a ordem definida por self.tipos_sensores
+        reconstructed_sensors = self.brain.separate_state_by_sensor(self.brain.latent_reconstructed.cpu().numpy().squeeze())
+        
+
+        if self.sensores_ativos[self.tipos_sensores.index("visao")]:
+            self.imagem_reconstruida = self.encoders["visao"].decode(torch.tensor(reconstructed_sensors["visao"])).cpu().numpy() * 255.0
+            print(f"Imagem reconstruída shape: {self.imagem_reconstruida.shape} | Valor máximo: {self.imagem_reconstruida.max()} | Valor mínimo: {self.imagem_reconstruida.min()}")
+
+
     def update(self, dt:float) -> None:
         self.delay_visao_atual += dt
         if self.sensores_ativos[self.tipos_sensores.index("tato")]:
@@ -268,6 +297,9 @@ class Robo():
         self.controles()
         if self.brain.get_reconstruction_loss() is not None and self.brain.get_total_reward() is not None:
             print(f" Reconstruction Loss: {self.brain.get_reconstruction_loss():.4f} | Total Reward: {self.brain.get_total_reward():.4f}") # Imprime a perda de reconstrução e a recompensa total para monitorar o desempenho do agente e do modelo de mundo ao longo do tempo
+
+        self.get_reconstructed_state()
+        
         self.phisics(dt)
 
     def sensor_gps(self):
