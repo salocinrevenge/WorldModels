@@ -3,7 +3,7 @@ import math
 import pyray as rl
 import numpy as np
 import torch
-from diffusers import AutoencoderKL
+import torch.nn as nn
 import torchvision.models as models
 import os
 
@@ -65,12 +65,74 @@ class Robo():
 
     def create_encoders(self):
 
-        class Vae: # Só vou usar isso aqui, acho q ta ok
-            def __init__(self):
-                self.model = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").eval()
-                self.last_format = None
+        class LightMobileDecoder(nn.Module):
+            def __init__(self, latent_dim=960, output_channels=3):
+                super(LightMobileDecoder, self).__init__()
+                
+                # 1. Projeta o vetor latente para o mapa inicial de 5x5
+                # Reduzimos drasticamente a quantidade de canais de 960 para 256 para economizar parâmetros
+                self.fc = nn.Sequential(
+                    nn.Linear(latent_dim, 256 * 5 * 5),
+                    nn.ReLU(inplace=True)
+                )
+                
+                # 2. Camadas de Upsampling Ultra Leves
+                # Passando de 5x5 -> 10x10 -> 20x20 -> 40x40 -> 80x80 -> 160x160
+                # Mantendo os canais baixos para ser rápido e economizar memória
+                self.decoder = nn.Sequential(
+                    # Entrada: [Batch, 256, 5, 5]
+                    nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1), # -> [Batch, 128, 10, 10]
+                    nn.BatchNorm2d(128),
+                    nn.ReLU(inplace=True),
+                    
+                    nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # -> [Batch, 64, 20, 20]
+                    nn.BatchNorm2d(64),
+                    nn.ReLU(inplace=True),
+                    
+                    nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),   # -> [Batch, 32, 40, 40]
+                    nn.BatchNorm2d(32),
+                    nn.ReLU(inplace=True),
+                    
+                    nn.ConvTranspose2d(32, 16, kernel_size=4, stride=2, padding=1),   # -> [Batch, 16, 80, 80]
+                    nn.BatchNorm2d(16),
+                    nn.ReLU(inplace=True),
+                    
+                    nn.ConvTranspose2d(16, output_channels, kernel_size=4, stride=2, padding=1) # -> [Batch, 3, 160, 160]
+                    # Nota: Tiramos o Sigmoid/Tanh daqui porque suas imagens são 0-255. 
+                    # Faremos a restrição de valores de forma mais eficiente no bloco forward.
+                )
+
+            def forward(self, latent_space):
+                # Garante a dimensão correta para batches
+                if len(latent_space.shape) == 1:
+                    latent_space = latent_space.unsqueeze(0)
+                    
+                # Transforma o vetor de 960 no mapa de 256 canais x 5x5
+                x = self.fc(latent_space)
+                x = x.view(-1, 256, 5, 5)
+                
+                # Executa as convoluções de upsampling
+                x = self.decoder(x)
+                
+                # Como suas imagens originais são 0-255:
+                # Usamos o torch.clamp para garantir que nenhum pixel reconstruído saia desse limite
+                decoded_image = torch.clamp(x, 0.0, 255.0)
+                
+                return decoded_image
+
+        class MobileEncoder: # Só vou usar isso aqui, acho q ta ok
+            def __init__(self, train_decode_while_encoding = True):
+                self.model = models.mobilenet_v3_large(weights=models.MobileNet_V3_Large_Weights.DEFAULT)
+                self.feature_extractor = self.model.features
+                self.avgpool = self.model.avgpool
+                self.decoder = LightMobileDecoder(latent_dim=960, output_channels=3)
+                self.train_decode_while_encoding = train_decode_while_encoding
+                # MSE loss e otimizador para treinar o decoder
+                self.mse_loss = nn.MSELoss()
+                self.decoder_optimizer = torch.optim.Adam(self.decoder.parameters(), lr=1e-4)
 
             def __call__(self, x):
+                orig_x = x.clone() # Mantém uma cópia da entrada original para o treinamento do decoder, se necessário
                 with torch.no_grad():
                     if len(x.shape)==3:
                         # se tem 4 canais, remove o canal alpha
@@ -78,22 +140,27 @@ class Robo():
                             x = x[0:3, :, :]
                         # Adiciona uma dimensão de batch
                         x = x.unsqueeze(0)
-                    x = x * 2.0 - 1.0 # Normaliza para o intervalo [-1, 1], que é o esperado pelo modelo
-                    x = self.model.encode(x).latent_dist.mode()
-                    # deixa tudo unidimensional
-                    self.last_format = x.shape
-                    x = x.view(x.size(0), -1)
-                    latent_space = torch.squeeze(x)
+                    x = self.feature_extractor(x)
+                    latent_space = torch.squeeze(self.avgpool(x))
+                
+                if self.train_decode_while_encoding:
+                    # Zera o gradiente:
+                    self.decoder.zero_grad()
+                    # Treina o decoder para reconstruir a imagem original a partir do espaço latente, usando a entrada original como alvo
+                    reconstructed_image = self.decode(latent_space)
+                    loss_fn = nn.MSELoss()
+                    loss = loss_fn(reconstructed_image, orig_x.unsqueeze(0))
+                    loss.backward() # Isso atualiza os pesos do decoder para melhorar a reconstrução ao longo do tempo
+                    self.decoder_optimizer.step()
+                    self.decoder_optimizer.zero_grad()
                 return latent_space
             
             def decode(self, latent_vector):
-                with torch.no_grad():
-                    # Reconstrói a imagem a partir do vetor latente
-                    reshaped = latent_vector.view(self.last_format) # Restaura a forma original antes de decodificar
-                    reconstructed = self.model.decode(reshaped).sample
-                    # Desnormaliza para o intervalo [0, 1]
-                    reconstructed = (reconstructed + 1.0) / 2.0
-                return reconstructed
+                # Usa o decoder para reconstruir a imagem a partir do espaço latente
+                reconstructed_image = self.decoder(latent_vector)
+                # adiciona um canal alpha cheio de 1.0 para garantir que a imagem reconstruída tenha o mesmo formato da imagem original (4 canais RGBA)
+                reconstructed_image = torch.cat([reconstructed_image, torch.ones_like(reconstructed_image[:, :1, :, :])], dim=1)
+                return reconstructed_image
 
         class IdentityEncoder:
             def __init__(self, ordem = None):
@@ -112,7 +179,7 @@ class Robo():
                 return torch.tensor([x]) # Converte para tensor, caso não seja nenhum dos tipos acima
 
         self.encoders = {
-            "visao": Vae(),
+            "visao": MobileEncoder(),
             "tato": IdentityEncoder(ordem=self.ordem_tato),
             "acc": IdentityEncoder(),
             "gyro": IdentityEncoder(),
@@ -271,8 +338,7 @@ class Robo():
         
 
         if self.sensores_ativos[self.tipos_sensores.index("visao")]:
-            self.imagem_reconstruida = self.encoders["visao"].decode(torch.tensor(reconstructed_sensors["visao"])).cpu().numpy() * 255.0
-            print(f"Imagem reconstruída shape: {self.imagem_reconstruida.shape} | Valor máximo: {self.imagem_reconstruida.max()} | Valor mínimo: {self.imagem_reconstruida.min()}")
+            self.imagem_reconstruida = self.encoders["visao"].decode(torch.tensor(reconstructed_sensors["visao"])).cpu().detach().numpy() * 255.0
 
 
     def update(self, dt:float) -> None:
@@ -295,8 +361,6 @@ class Robo():
             self.sensor_gps()
 
         self.controles()
-        if self.brain.get_reconstruction_loss() is not None and self.brain.get_total_reward() is not None:
-            print(f" Reconstruction Loss: {self.brain.get_reconstruction_loss():.4f} | Total Reward: {self.brain.get_total_reward():.4f}") # Imprime a perda de reconstrução e a recompensa total para monitorar o desempenho do agente e do modelo de mundo ao longo do tempo
 
         self.get_reconstructed_state()
         

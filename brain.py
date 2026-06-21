@@ -241,10 +241,8 @@ class Brain():
         # Método para separar o estado concatenado em partes correspondentes a cada sensor, baseado na ordem definida em self.sensors_names e nas formas armazenadas em self.individual_shapes
         separated_info = {}
         idx = 0
-        print(state.shape)
         for name in self.sensors_names:
             length = self.individual_shapes[self.sensors_names.index(name)]
-            print(f"Separando estado para sensor '{name}' com shape {length} a partir do índice {idx}")
             separated_info[name] = state[idx:idx+length]
             idx += length
 
@@ -401,9 +399,6 @@ class Brain():
             self.decoder_optim.step()
 
             self.latent_reconstructed = reconstructed_state.detach()
-
-            print(f"Loss da reconstrucao do latente: {reconstruction_loss.item():.4f}")
-
 
         self.reward = 0. # Reseta o reforço para a próxima iteração
 
