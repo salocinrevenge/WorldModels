@@ -394,7 +394,7 @@ class Brain():
         self.latent_reconstructed = None
         if features_current_state is not None:
             reconstructed_state = self.feature_decoder(features_current_state)
-            reconstruction_loss = self.mse_loss(reconstructed_state, self.current_state)
+            reconstruction_loss = self.mse_loss(reconstructed_state.squeeze(), self.current_state)
             reconstruction_loss.backward()
             self.decoder_optim.step()
 

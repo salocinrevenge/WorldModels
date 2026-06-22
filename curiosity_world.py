@@ -64,36 +64,6 @@ class Curiosity_world():
         if len(self.agente.brain.memory) < self.agente.brain.warm_up_steps:
             rl.draw_text(f"WARM UP: {len(self.agente.brain.memory)}/{self.agente.brain.warm_up_steps}", 1010, 185, 20, rl.RED)
 
-        # Renderizar a imagem reconstruída, se disponível
-        if self.agente.imagem_reconstruida is not None:
-            # escala para ficar entre 255 e 0, para evitar problemas de renderização
-            self.agente.imagem_reconstruida = (self.agente.imagem_reconstruida - self.agente.imagem_reconstruida.min()) / (self.agente.imagem_reconstruida.max() - self.agente.imagem_reconstruida.min()) * 255
-            self.agente.imagem_reconstruida = self.agente.imagem_reconstruida.squeeze() # Remove dimensões desnecessárias, se houver
-            # Desenha a imagem reconstruída no HUD, abaixo das informações de texto, colando na textura original
-            # 1. Garante o formato [Altura, Largura, Canais] (Ex: de 3x160x160 para 160x160x3)
-            array_rgb = self.agente.imagem_reconstruida.transpose(1, 2, 0).astype("uint8").copy()
-
-            altura, largura, canais = array_rgb.shape
-
-            # 2. Cria a imagem passando os dados puros e os metadados
-            import ctypes
-
-            imagem_rl = rl.Image(
-                rl.ffi.from_buffer(array_rgb),      # data (ponteiro cdata do CFFI)
-                largura,                            # width
-                altura,                             # height
-                1,                                  # mipmaps
-                rl.PIXELFORMAT_UNCOMPRESSED_R8G8B8  # format
-            )
-
-            self.textura = rl.load_texture_from_image(imagem_rl)
-
-            # 3. Agora a textura carregará corretamente na GPU
-            textura = rl.load_texture_from_image(imagem_rl)
-            rl.draw_texture(textura, 1010, 210, rl.WHITE)
-            rl.draw_rectangle_lines(1010, 210, textura.width, textura.height, rl.GREEN)
-            rl.unload_texture(textura)
-
     def render(self):
         self.render_terreno()
         self.agente.render()

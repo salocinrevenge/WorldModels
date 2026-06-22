@@ -339,6 +339,19 @@ class Robo():
 
         if self.sensores_ativos[self.tipos_sensores.index("visao")]:
             self.imagem_reconstruida = self.encoders["visao"].decode(torch.tensor(reconstructed_sensors["visao"])).cpu().detach().numpy() * 255.0
+            # Salva a imagem reconstruída como PNG para monitoramento
+            caminho_png = f"capturas_visao/reconstruido.png"
+            #Usando pil
+            from PIL import Image
+            print(self.imagem_reconstruida.astype('uint8').shape)
+            self.imagem_reconstruida = self.imagem_reconstruida.squeeze()  # Remove dimensões desnecessárias, se houver
+            # Remove o canal alpha antes de salvar, se existir
+            if self.imagem_reconstruida.shape[0] == 4:
+                self.imagem_reconstruida = self.imagem_reconstruida[:3, :, :]
+            img = Image.fromarray(self.imagem_reconstruida.astype('uint8').transpose(1, 2, 0)) # Transpõe para [Altura, Largura, Canais] antes de salvar
+            img.save(caminho_png)
+            
+
 
 
     def update(self, dt:float) -> None:
