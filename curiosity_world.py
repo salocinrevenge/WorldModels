@@ -11,7 +11,7 @@ class Curiosity_world():
         self.agente = Robo(self, "cerebro/") # Agente do mundo, para interagir com o ambiente
         self.escala = 50
         self.ticks = 0
-        self.tempo_simulacao = 25611
+        self.tempo_simulacao = 2561
 
     def update(self, dt):
         self.agente.update(dt)
@@ -63,6 +63,8 @@ class Curiosity_world():
             rl.draw_rectangle(1300, 180-max(int(self.agente.last_action[1].item() * 25), 0), 20, abs(int(self.agente.last_action[1].item() * 25)), rl.BLUE)
         if len(self.agente.brain.memory) < self.agente.brain.warm_up_steps:
             rl.draw_text(f"WARM UP: {len(self.agente.brain.memory)}/{self.agente.brain.warm_up_steps}", 1010, 185, 20, rl.RED)
+        else:   
+            rl.draw_text(f"TRAINING: {len(self.agente.brain.memory)}", 1010, 185, 20, rl.WHITE)
 
     def render(self):
         self.render_terreno()

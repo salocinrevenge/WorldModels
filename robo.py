@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torchvision.models as models
 import os
+from PIL import Image
 
 from brain import Brain
 
@@ -62,6 +63,9 @@ class Robo():
         self.limiar_dor = 5 # Se o tato for maior que isso, recebe recompensa negativa igual a quanto ele está mais que o limiar
         self.last_action = None
         self.imagem_reconstruida = None
+        self.update_counter = 0
+        self.decoder_steps = 0
+        self.frames_to_act = 30
 
     def create_encoders(self):
 
@@ -121,11 +125,14 @@ class Robo():
                 return decoded_image
 
         class MobileEncoder: # Só vou usar isso aqui, acho q ta ok
-            def __init__(self, train_decode_while_encoding = True):
+            def __init__(self, train_decode_while_encoding = True, path_to_save_models = None):
                 self.model = models.mobilenet_v3_large(weights=models.MobileNet_V3_Large_Weights.DEFAULT)
                 self.feature_extractor = self.model.features
                 self.avgpool = self.model.avgpool
                 self.decoder = LightMobileDecoder(latent_dim=960, output_channels=3)
+                self.path_to_save_models = path_to_save_models
+                if self.path_to_save_models and os.path.exists(os.path.join(self.path_to_save_models, "decoder.pth")):
+                    self.decoder.load_state_dict(torch.load(os.path.join(self.path_to_save_models, "decoder.pth")))
                 self.train_decode_while_encoding = train_decode_while_encoding
                 # MSE loss e otimizador para treinar o decoder
                 self.mse_loss = nn.MSELoss()
@@ -179,7 +186,7 @@ class Robo():
                 return torch.tensor([x]) # Converte para tensor, caso não seja nenhum dos tipos acima
 
         self.encoders = {
-            "visao": MobileEncoder(),
+            "visao": MobileEncoder(path_to_save_models=self.path_to_save_models),
             "tato": IdentityEncoder(ordem=self.ordem_tato),
             "acc": IdentityEncoder(),
             "gyro": IdentityEncoder(),
@@ -188,6 +195,8 @@ class Robo():
         
 
     def controles(self):
+        if self.autonomous and self.update_counter % self.frames_to_act != 0:
+            return
         match self.tipos_controle[self.controle_atual]:
             case "absoluto":
 
@@ -338,23 +347,26 @@ class Robo():
         
 
         if self.sensores_ativos[self.tipos_sensores.index("visao")]:
+            self.decoder_steps += 1
             self.imagem_reconstruida = self.encoders["visao"].decode(torch.tensor(reconstructed_sensors["visao"])).cpu().detach().numpy() * 255.0
             # Salva a imagem reconstruída como PNG para monitoramento
             caminho_png = f"capturas_visao/reconstruido.png"
-            #Usando pil
-            from PIL import Image
-            print(self.imagem_reconstruida.astype('uint8').shape)
+            
             self.imagem_reconstruida = self.imagem_reconstruida.squeeze()  # Remove dimensões desnecessárias, se houver
             # Remove o canal alpha antes de salvar, se existir
             if self.imagem_reconstruida.shape[0] == 4:
                 self.imagem_reconstruida = self.imagem_reconstruida[:3, :, :]
             img = Image.fromarray(self.imagem_reconstruida.astype('uint8').transpose(1, 2, 0)) # Transpõe para [Altura, Largura, Canais] antes de salvar
-            img.save(caminho_png)
+            if self.decoder_steps % 64 == 0:
+                img.save(caminho_png)
+                torch.save(self.encoders["visao"].decoder.state_dict(), os.path.join(self.path_to_save_models, "decoder.pth"))
             
 
 
 
     def update(self, dt:float) -> None:
+        self.update_counter += 1
+        
         self.delay_visao_atual += dt
         if self.sensores_ativos[self.tipos_sensores.index("tato")]:
             self.sensor_tato()
@@ -422,7 +434,7 @@ class Robo():
 
         # Região de origem (Mundo)
         X_min = self.pos.x - self.raio_visao
-        Y_min = (self.world.handler.motor.WINDOW_HEIGHT - self.pos.y) - self.raio_visao
+        Y_min = (self.world.handler.motor.VIRTUAL_H - self.pos.y) - self.raio_visao
         src_rect = rl.Rectangle(X_min, Y_min, self.tamanho_quadrado_visao, self.tamanho_quadrado_visao)
 
         # Região de destino (Nossa mini textura)

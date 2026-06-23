@@ -139,8 +139,8 @@ class ConfigArgs:
     beta = 0.2
     eta = 500.0 # Scale factor for intrinsic reward
     discounted_factor = 0.99
-    lr = 3e-1 # Taxa de aprendizado padrão do SAC para todas as redes
-    batch_size = 256
+    lr = 3e-4 # Taxa de aprendizado padrão do SAC para todas as redes
+    batch_size = 16
     buffer_capacity = 100000
     tau = 0.005 # Fator de atualização suave da rede alvo
     alpha_init = 0.2 # Temperatura inicial
@@ -167,8 +167,8 @@ class Brain():
         self.need_to_initialize_models = True
         
         self.memory = ReplayBuffer(self.args.buffer_capacity)
-        self.n_steps_until_save = self.args.batch_size * 3 # Salva os modelos a cada 3 batches completos
-        self.warm_up_steps = 256 # Número de etapas para aquecer o buffer de replay
+        self.n_steps_until_save = self.args.batch_size * 5 # Salva os modelos a cada 3 batches completos
+        self.warm_up_steps = 16 # Número de etapas para aquecer o buffer de replay
         self.get_moving_average_reward_window = deque(maxlen=len_moving_average) # Janela para calcular a média móvel da recompensa
         self.latent_reconstructed = None
         self.individual_shapes = None
