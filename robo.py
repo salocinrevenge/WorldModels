@@ -35,8 +35,8 @@ class Robo():
         self.tipos_controle = ["absoluto", "rotacional", "rodas"]
         self.controle_atual = 2
 
-        self.tipos_sensores = ["visao", "tato", "acc", "gyro", "gps"]
-        self.sensores_ativos = [True, True, True, True, True]
+        self.tipos_sensores = ["visao", "tato", "acc", "gyro", "gps", "compass", "time"]
+        self.sensores_ativos = [True, True, True, True, True, True, True]
         self.tato = {"N": 0, "S": 0, "E": 0, "W": 0}
         self.ordem_tato = ["N", "S", "E", "W"]
 
@@ -56,7 +56,7 @@ class Robo():
         self.last_pos = [rl.Vector2(self.pos.x, self.pos.y), rl.Vector2(self.pos.x, self.pos.y), rl.Vector2(self.pos.x, self.pos.y)]
         self.last_angulo = [self.angulo, self.angulo]
 
-        self.brain = Brain(self, num_actions=2, path_to_save_models=self.path_to_save_models)
+        self.brain = Brain(self, num_actions=2)
         self.create_encoders()
         self.autonomous = True # Se True, o robô é controlado pelo cérebro, se False, é controlado pelo usuário
         self.recompensas_terreno = {"G": 1, "B": -10}
@@ -65,78 +65,15 @@ class Robo():
         self.imagem_reconstruida = None
         self.update_counter = 0
         self.decoder_steps = 0
-        self.frames_to_act = 30
+        self.frames_to_act = 1
 
     def create_encoders(self):
 
-        class LightMobileDecoder(nn.Module):
-            def __init__(self, latent_dim=960, output_channels=3):
-                super(LightMobileDecoder, self).__init__()
-                
-                # 1. Projeta o vetor latente para o mapa inicial de 5x5
-                # Reduzimos drasticamente a quantidade de canais de 960 para 256 para economizar parâmetros
-                self.fc = nn.Sequential(
-                    nn.Linear(latent_dim, 256 * 5 * 5),
-                    nn.ReLU(inplace=True)
-                )
-                
-                # 2. Camadas de Upsampling Ultra Leves
-                # Passando de 5x5 -> 10x10 -> 20x20 -> 40x40 -> 80x80 -> 160x160
-                # Mantendo os canais baixos para ser rápido e economizar memória
-                self.decoder = nn.Sequential(
-                    # Entrada: [Batch, 256, 5, 5]
-                    nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1), # -> [Batch, 128, 10, 10]
-                    nn.BatchNorm2d(128),
-                    nn.ReLU(inplace=True),
-                    
-                    nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # -> [Batch, 64, 20, 20]
-                    nn.BatchNorm2d(64),
-                    nn.ReLU(inplace=True),
-                    
-                    nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),   # -> [Batch, 32, 40, 40]
-                    nn.BatchNorm2d(32),
-                    nn.ReLU(inplace=True),
-                    
-                    nn.ConvTranspose2d(32, 16, kernel_size=4, stride=2, padding=1),   # -> [Batch, 16, 80, 80]
-                    nn.BatchNorm2d(16),
-                    nn.ReLU(inplace=True),
-                    
-                    nn.ConvTranspose2d(16, output_channels, kernel_size=4, stride=2, padding=1) # -> [Batch, 3, 160, 160]
-                    # Nota: Tiramos o Sigmoid/Tanh daqui porque suas imagens são 0-255. 
-                    # Faremos a restrição de valores de forma mais eficiente no bloco forward.
-                )
-
-            def forward(self, latent_space):
-                # Garante a dimensão correta para batches
-                if len(latent_space.shape) == 1:
-                    latent_space = latent_space.unsqueeze(0)
-                    
-                # Transforma o vetor de 960 no mapa de 256 canais x 5x5
-                x = self.fc(latent_space)
-                x = x.view(-1, 256, 5, 5)
-                
-                # Executa as convoluções de upsampling
-                x = self.decoder(x)
-                
-                # Como suas imagens originais são 0-255:
-                # Usamos o torch.clamp para garantir que nenhum pixel reconstruído saia desse limite
-                decoded_image = torch.clamp(x, 0.0, 255.0)
-                
-                return decoded_image
-
         class MobileEncoder: # Só vou usar isso aqui, acho q ta ok
-            def __init__(self, train_decode_while_encoding = True, path_to_save_models = None):
+            def __init__(self = True, path_to_save_models = None):
                 self.model = models.mobilenet_v3_large(weights=models.MobileNet_V3_Large_Weights.DEFAULT)
                 self.feature_extractor = self.model.features
                 self.avgpool = self.model.avgpool
-                self.decoder = LightMobileDecoder(latent_dim=960, output_channels=3)
-                self.path_to_save_models = path_to_save_models
-                if self.path_to_save_models and os.path.exists(os.path.join(self.path_to_save_models, "decoder.pth")):
-                    self.decoder.load_state_dict(torch.load(os.path.join(self.path_to_save_models, "decoder.pth")))
-                self.train_decode_while_encoding = train_decode_while_encoding
-                # MSE loss e otimizador para treinar o decoder
-                self.mse_loss = nn.MSELoss()
-                self.decoder_optimizer = torch.optim.Adam(self.decoder.parameters(), lr=1e-4)
 
             def __call__(self, x):
                 orig_x = x.clone() # Mantém uma cópia da entrada original para o treinamento do decoder, se necessário
@@ -150,24 +87,7 @@ class Robo():
                     x = self.feature_extractor(x)
                     latent_space = torch.squeeze(self.avgpool(x))
                 
-                if self.train_decode_while_encoding:
-                    # Zera o gradiente:
-                    self.decoder.zero_grad()
-                    # Treina o decoder para reconstruir a imagem original a partir do espaço latente, usando a entrada original como alvo
-                    reconstructed_image = self.decode(latent_space)
-                    loss_fn = nn.MSELoss()
-                    loss = loss_fn(reconstructed_image, orig_x.unsqueeze(0))
-                    loss.backward() # Isso atualiza os pesos do decoder para melhorar a reconstrução ao longo do tempo
-                    self.decoder_optimizer.step()
-                    self.decoder_optimizer.zero_grad()
                 return latent_space
-            
-            def decode(self, latent_vector):
-                # Usa o decoder para reconstruir a imagem a partir do espaço latente
-                reconstructed_image = self.decoder(latent_vector)
-                # adiciona um canal alpha cheio de 1.0 para garantir que a imagem reconstruída tenha o mesmo formato da imagem original (4 canais RGBA)
-                reconstructed_image = torch.cat([reconstructed_image, torch.ones_like(reconstructed_image[:, :1, :, :])], dim=1)
-                return reconstructed_image
 
         class IdentityEncoder:
             def __init__(self, ordem = None):
@@ -190,7 +110,9 @@ class Robo():
             "tato": IdentityEncoder(ordem=self.ordem_tato),
             "acc": IdentityEncoder(),
             "gyro": IdentityEncoder(),
-            "gps": IdentityEncoder()
+            "gps": IdentityEncoder(),
+            "compass": IdentityEncoder(),
+            "time": IdentityEncoder()
         }
         
 
@@ -326,7 +248,7 @@ class Robo():
 
         # Atualiza a velocidade angular e o ângulo do robô com base na aceleração angular
         self.vel_angular += self.acc_angular
-        self.angulo += self.vel_angular
+        self.angulo = (self.angulo + self.vel_angular)%(2 * math.pi)  # Mantém o ângulo entre -π e π
 
         self.last_angulo.pop(0)
         self.last_angulo.append(self.angulo)
@@ -385,6 +307,12 @@ class Robo():
         if self.sensores_ativos[self.tipos_sensores.index("gps")]:
             self.sensor_gps()
 
+        if self.sensores_ativos[self.tipos_sensores.index("compass")]:
+            self.sensor_compass()
+
+        if self.sensores_ativos[self.tipos_sensores.index("time")]:
+            self.sensor_time()
+
         self.controles()
 
         self.get_reconstructed_state()
@@ -417,6 +345,16 @@ class Robo():
         if max(self.tato.values()) > self.limiar_dor:
             self.brain.add_reward(- (max(self.tato.values()) - self.limiar_dor)) # Recompensa negativa proporcional a quanto o tato ultrapassa o limiar de dor
         return self.tato
+    
+    def sensor_compass(self):
+        # Simula o sensor de bússola, que retorna o ângulo do robô em relação ao norte (0 radianos)
+        self.brain.set_info_sensor(self.angulo, "compass", encoder=self.encoders["compass"])
+        return self.angulo
+    
+    def sensor_time(self):
+        # Simula o sensor de tempo, que retorna o tempo decorrido desde o início da simulação
+        self.brain.set_info_sensor(self.update_counter, "time", encoder=self.encoders["time"])
+        return self.update_counter
 
     def sensor_visao(self):
         """
@@ -513,3 +451,10 @@ class Robo():
                 pos_ponta = rl.Vector2(self.pos.x + self.raio//2 * math.cos(self.angulo), self.pos.y + self.raio//2 * math.sin(self.angulo))
                 rl.draw_poly(pos_ponta, 3, self.raio//2, (self.angulo+math.pi) * 180 / math.pi, rl.RED)
 
+        # Desenha um círculo representando o alvo do robô
+        rl.draw_circle(int(self.brain.target[0]), int(self.brain.target[1]), 5, rl.YELLOW)
+
+
+    def get_random_pos(self):
+        # Retorna uma posição aleatória no terreno que seja igual ao caracter "."
+        return self.world.get_random_valid_terrain_position(caracter = ".")

@@ -16,9 +16,7 @@ class Motor():
         rl.set_target_fps(60)
         rl.enable_cursor()
 
-        # =========================================================================
-        # CORREÇÃO: O tamanho virtual agora é FIXO em 1400x1000 (proporção do jogo)
-        # =========================================================================
+
         self.VIRTUAL_W, self.VIRTUAL_H = 1400, 1000 
         
         # A textura é criada UMA VEZ com o tamanho fixo e NUNCA mais é recriada
