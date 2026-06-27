@@ -36,7 +36,6 @@ class Encoder(nn.Module):
         self.fc = nn.Linear(space_dims, hidden_dims)
 
     def forward(self, x):
-        print("Input:", x)
         y = torch.tanh(self.fc(x))
         return y
 
@@ -52,6 +51,10 @@ class WorldModel():
         self.hidden_dims = 16
         self.latent_variables_shape = 16
         self.lr_icm = 1e-3
+        self.mse_inverse_loss = None
+        self.batch_size = 16
+        self.batch_counter = 0
+        self.initialized = False
 
     def set_state(self, state):
         self.last_state = self.current_state
@@ -61,11 +64,11 @@ class WorldModel():
         self.last_action = action
         
     def init_models(self):
-        self.feature_extractor = Encoder(space_dims=len(self.current_state), hidden_dims=self.hidden_dims)
+        self.encoder= Encoder(space_dims=len(self.current_state), hidden_dims=self.hidden_dims)
         self.dynamics_model = Dynamics(latent_variables_shape=self.latent_variables_shape, hidden_dims=self.hidden_dims)
         self.inverse_model = LatentInverseDynamics(latent_variables_shape=self.latent_variables_shape, action_shape=len(self.last_action), hidden_dims=self.hidden_dims)
         self.latent_policy_model = LatentPolicy(hidden_dims=self.hidden_dims, action_shape=len(self.last_action), latent_variables_shape=self.latent_variables_shape)
-        self.icm_params = list(self.feature_extractor.parameters())+ list(self.dynamics_model.parameters()) + list(self.inverse_model.parameters()) + list(self.latent_policy_model.parameters())
+        self.icm_params = list(self.encoder.parameters())+ list(self.dynamics_model.parameters()) + list(self.inverse_model.parameters()) + list(self.latent_policy_model.parameters())
         self.icm_optim = torch.optim.Adam(self.icm_params, lr=self.lr_icm)
         self.mse_loss = nn.MSELoss()
 
@@ -73,18 +76,21 @@ class WorldModel():
         if self.last_state is None or self.current_state is None or self.last_action is None:
             return
         
-        self.init_models()
+        if not self.initialized:
+            self.init_models()
+            self.initialized = True
 
+        latent_space_current = self.encoder(self.current_state)
         if self.predicted_latent_space is not None and self.mse_inverse_loss is not None:
-            mse_state_loss = self.mse_loss(self.predicted_latent_space, self.current_state)
+            mse_state_loss = self.mse_loss(self.predicted_latent_space, latent_space_current)
             loss_somadas = mse_state_loss + self.mse_inverse_loss
             loss_somadas.backward()
             self.icm_optim.step()            
+            self.icm_optim.zero_grad()
 
-        self.icm_optim.zero_grad()
         
-        latent_space_last = self.feature_extractor(self.last_state)
-        latent_space_current = self.feature_extractor(self.current_state)
+        latent_space_last = self.encoder(self.last_state)
+        latent_space_current = self.encoder(self.current_state)
 
         predicted_latent_variable_1 = self.inverse_model(torch.cat([latent_space_last, latent_space_current, self.last_action], dim=-1))
         predicted_latent_variable_2 = self.latent_policy_model(torch.cat([latent_space_last, self.last_action], dim=-1))
