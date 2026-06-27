@@ -7,7 +7,6 @@ class LatentInverseDynamics(nn.Module): # Dado estado atual e próximo estado, p
         self.fc = nn.Linear(hidden_dims*2+action_shape, latent_variables_shape)
 
     def forward(self, features):
-        features = features.view(1, -1) # (1, hidden_dims)
         action = self.fc(features) # (1, latent_variables_shape)
         return action
 
@@ -17,10 +16,9 @@ class Dynamics(nn.Module): # Dado
         self.fc = nn.Linear(hidden_dims+latent_variables_shape, hidden_dims)
         self.eye = torch.eye(latent_variables_shape)
 
-    def forward(self, action, features):
-        x = torch.cat([self.eye[action], features], dim=-1) # (1, latent_variables_shape+hidden_dims)
-        features = self.fc(x) # (1, hidden_dims)
-        return features
+    def forward(self, latent_variable, features):
+        prediction = self.fc(torch.cat([latent_variable, features], dim=-1))
+        return prediction
     
 class LatentPolicy(nn.Module):
     def __init__(self, latent_variables_shape, action_shape, hidden_dims):
@@ -29,7 +27,6 @@ class LatentPolicy(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, features):
-        features = features.view(1, -1) # (1, hidden_dims)
         action_probs = self.softmax(self.fc(features)) # (1, latent_variables_shape)
         return action_probs
 
@@ -39,6 +36,7 @@ class Encoder(nn.Module):
         self.fc = nn.Linear(space_dims, hidden_dims)
 
     def forward(self, x):
+        print("Input:", x)
         y = torch.tanh(self.fc(x))
         return y
 
@@ -63,11 +61,11 @@ class WorldModel():
         self.last_action = action
         
     def init_models(self):
-        self.feature_extractor = Encoder(space_dims=self.current_state.size(0), hidden_dims=self.hidden_dims)
+        self.feature_extractor = Encoder(space_dims=len(self.current_state), hidden_dims=self.hidden_dims)
         self.dynamics_model = Dynamics(latent_variables_shape=self.latent_variables_shape, hidden_dims=self.hidden_dims)
-        self.inverse_model = LatentInverseDynamics(latent_variables_shape=self.latent_variables_shape, action_shape=self.last_action.size(0), hidden_dims=self.hidden_dims)
-        self.latent_policy_model = LatentPolicy(hidden_dims=self.hidden_dims, action_shape=self.last_action.size(0), latent_variables_shape=self.latent_variables_shape)
-        self.icm_params = list(self.feature_extractor.parameters())+ list(self.dynamics_model.parameters()) + list(self.inverse_model.parameters() + list(self.latent_policy_model.parameters()))
+        self.inverse_model = LatentInverseDynamics(latent_variables_shape=self.latent_variables_shape, action_shape=len(self.last_action), hidden_dims=self.hidden_dims)
+        self.latent_policy_model = LatentPolicy(hidden_dims=self.hidden_dims, action_shape=len(self.last_action), latent_variables_shape=self.latent_variables_shape)
+        self.icm_params = list(self.feature_extractor.parameters())+ list(self.dynamics_model.parameters()) + list(self.inverse_model.parameters()) + list(self.latent_policy_model.parameters())
         self.icm_optim = torch.optim.Adam(self.icm_params, lr=self.lr_icm)
         self.mse_loss = nn.MSELoss()
 

@@ -1,11 +1,13 @@
 from critic import Critic
 from actor import Actor
+from worldModel import WorldModel
+import torch
 
 class Brain():
     def __init__(self, robo, num_actions):
         self.robo = robo
         # Estrutura da arquitetura cognitiva
-        self.modelo_de_mundo = None
+        self.modelo_de_mundo = WorldModel(robo)
         self.actor = Actor(num_actions)
         self.critic = Critic()
 
@@ -47,6 +49,9 @@ class Brain():
 
         self.latent_space = self.latent_reconstructed
         self.action = self.actor.get_action((*self.value_sensors["gps"], self.value_sensors["compass"]), self.target)
+        self.modelo_de_mundo.set_state(torch.tensor((*self.value_sensors["gps"], self.value_sensors["compass"]), dtype=torch.float32))
+        self.modelo_de_mundo.set_action(torch.tensor(self.action, dtype=torch.float32))
+        self.modelo_de_mundo.update()
         return self.action
 
 
