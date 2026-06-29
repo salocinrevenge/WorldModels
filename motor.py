@@ -40,11 +40,11 @@ class Motor():
     def render(self): # Método chamado a cada frame
         rl.begin_drawing()
         
-        # Limpa a janela real (caso haja barras pretas nas laterais/cima/baixo)
-        rl.clear_background(rl.BLACK) 
 
         # 1. Ativa a textura virtual de tamanho FIXO e desenha o jogo nela
-        rl.begin_texture_mode(self.render_tex)  
+        rl.begin_texture_mode(self.render_tex) 
+         
+        # Limpa a janela real (caso haja barras pretas nas laterais/cima/baixo)
         rl.clear_background(rl.BLACK) 
         
         self.handler.render() # Renderiza mapa, robô e HUD no espaço de 1400x1000

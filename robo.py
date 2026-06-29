@@ -56,7 +56,8 @@ class Robo():
         self.last_pos = [rl.Vector2(self.pos.x, self.pos.y), rl.Vector2(self.pos.x, self.pos.y), rl.Vector2(self.pos.x, self.pos.y)]
         self.last_angulo = [self.angulo, self.angulo]
 
-        self.brain = Brain(self, num_actions=2)
+        self.frames_to_act = 10
+        self.brain = Brain(self, num_actions=2, frames_to_act=self.frames_to_act)
         self.create_encoders()
         self.autonomous = True # Se True, o robô é controlado pelo cérebro, se False, é controlado pelo usuário
         self.recompensas_terreno = {"G": 1, "B": -10}
@@ -65,7 +66,6 @@ class Robo():
         self.imagem_reconstruida = None
         self.update_counter = 0
         self.decoder_steps = 0
-        self.frames_to_act = 1
 
     def create_encoders(self):
 
@@ -453,6 +453,9 @@ class Robo():
 
         # Desenha um círculo representando o alvo do robô
         rl.draw_circle(int(self.brain.target[0]), int(self.brain.target[1]), 5, rl.YELLOW)
+
+        # Desenha as coisas relacionadas ao cerebro dele
+        self.brain.render()
 
 
     def get_random_pos(self):

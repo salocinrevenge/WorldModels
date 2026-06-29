@@ -31,16 +31,19 @@ class Actor():
         # Se o abs do angulo for menor que 10 graus, vamos considerar que o robo esta apontando para o alvo, e vamos seguir em frente
         if abs(angle_to_correct) > math.radians(10):
             # Se o angulo for positivo, vamos girar para a esquerda, se for negativo, vamos girar para a direita
+            power = min(max(abs(angle_to_correct) / math.pi, 0.5), 1.0)
             if angle_to_correct < 0:
-                left_wheel = -1.0
-                right_wheel = 1.0
+                left_wheel = -1.0 * power
+                right_wheel = 1.0 * power
             else:
-                left_wheel = 1.0
-                right_wheel = -1.0
+                left_wheel = 1.0 * power
+                right_wheel = -1.0 * power
         else:
             # Se o robo estiver apontando para o alvo, vamos seguir em frente
-            left_wheel = 1.0
-            right_wheel = 1.0
+            distance_to_target = math.sqrt(delta_x**2 + delta_y**2)
+            power = min(distance_to_target / 10.0, 1.0)
+            left_wheel = 1.0 * power
+            right_wheel = 1.0 * power
 
         return torch.tensor([left_wheel, right_wheel])
 

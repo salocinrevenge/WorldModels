@@ -1,6 +1,7 @@
 import math
 import random
 
+
 from robo import Robo
 
 import pyray as rl
@@ -14,12 +15,14 @@ class Curiosity_world():
         self.tempo_simulacao = 2561
         self.agente = Robo(self, "cerebro/") # Agente do mundo, para interagir com o ambiente
 
+
     def update(self, dt):
         self.agente.update(dt)
         self.ticks += 1
         if self.ticks >= self.tempo_simulacao:
             self.ticks = 0
             self.agente = Robo(self, "cerebro/") # Reinicia o agente para testar o aprendizado ao longo do tempo
+
 
     def render_terreno(self):
         for i, linha in enumerate(self.terreno):
@@ -114,7 +117,10 @@ class Curiosity_world():
     def get_random_valid_terrain_position(self, caracter = "."):
         # Retorna uma posição aleatória no terreno que seja igual ao caracter
         while True:
-            x = random.randint(0, len(self.terreno[0]) - 1)
-            y = random.randint(0, len(self.terreno) - 1)
-            if self.terreno[y][x] == caracter:
-                return rl.Vector2(x * self.escala + self.escala // 2, y * self.escala + self.escala // 2)
+            x = random.randint(0, len(self.terreno[0]) - 2)
+            y = random.randint(0, len(self.terreno) - 2)
+            try:
+                if self.terreno[y][x] == caracter:
+                    return rl.Vector2(x * self.escala + self.escala // 2, y * self.escala + self.escala // 2)
+            except IndexError:
+                raise IndexError(f"IndexError: x={x}, y={y}, len(terreno)={len(self.terreno)}, len(terreno[0])={len(self.terreno[0])}")

@@ -4,10 +4,10 @@ from worldModel import WorldModel
 import torch
 
 class Brain():
-    def __init__(self, robo, num_actions):
+    def __init__(self, robo, num_actions, frames_to_act):
         self.robo = robo
         # Estrutura da arquitetura cognitiva
-        self.modelo_de_mundo = WorldModel(robo)
+        self.modelo_de_mundo = WorldModel(robo, path_to_save="world_model/")
         self.actor = Actor(num_actions)
         self.critic = Critic()
 
@@ -24,7 +24,7 @@ class Brain():
         self.action = None
 
         # Paciencia maxima para o robo atingir o alvo
-        self.paciencia_alvo_maxima = 200
+        self.paciencia_alvo_maxima = 300/frames_to_act
         self.paciencia_alvo_atual = 0
 
         # Target
@@ -49,7 +49,16 @@ class Brain():
 
         self.latent_space = self.latent_reconstructed
         self.action = self.actor.get_action((*self.value_sensors["gps"], self.value_sensors["compass"]), self.target)
-        self.modelo_de_mundo.set_state(torch.tensor((*self.value_sensors["gps"], self.value_sensors["compass"]), dtype=torch.float32))
+        # Junta todos os sensores e o target em um único tensor para passar para o modelo de mundo
+
+        state = torch.tensor([], dtype=torch.float32)
+        for sensor in self.order_sensors:
+            state = torch.cat((state, torch.tensor(self.value_sensors[sensor], dtype=torch.float32)))
+        state = torch.cat((state, torch.tensor([self.target[0], self.target[1]], dtype=torch.float32)))
+        self.modelo_de_mundo.set_state(state)
+
+
+        # self.modelo_de_mundo.set_state(torch.tensor((*self.value_sensors["gps"], self.value_sensors["compass"]), dtype=torch.float32))
         self.modelo_de_mundo.set_action(torch.tensor(self.action, dtype=torch.float32))
         self.modelo_de_mundo.update()
         return self.action
@@ -76,3 +85,5 @@ class Brain():
         self.target_range = 10
 
         
+    def render(self):
+        self.modelo_de_mundo.render()
