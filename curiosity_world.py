@@ -1,19 +1,25 @@
 import math
 import random
 
-
+from controlador import Controlador
 from robo import Robo
 
 import pyray as rl
 
 class Curiosity_world():
-    def __init__(self, handler):
+    def __init__(self, handler, registrar = False, executar = True):
         self.handler = handler
         self.terreno = self.build_world() # Lista de objetos do terreno
         self.escala = 50
         self.ticks = 0
         self.tempo_simulacao = 2561
         self.agente = Robo(self, "cerebro/") # Agente do mundo, para interagir com o ambiente
+        self.registrar = registrar
+        self.executar = executar
+        assert not (self.registrar and self.executar), "Não é possível registrar e executar ao mesmo tempo"
+        if self.registrar or self.executar:
+            self.controlador = Controlador(self, self.registrar, path_of_save="log.json")
+
 
 
     def update(self, dt):
@@ -22,6 +28,8 @@ class Curiosity_world():
         if self.ticks >= self.tempo_simulacao:
             self.ticks = 0
             self.agente = Robo(self, "cerebro/") # Reinicia o agente para testar o aprendizado ao longo do tempo
+        if self.registrar or self.executar:
+            self.controlador.update()
 
 
     def render_terreno(self):

@@ -36,7 +36,7 @@ class Robo():
         self.controle_atual = 2
 
         self.tipos_sensores = ["visao", "tato", "acc", "gyro", "gps", "compass", "time"]
-        self.sensores_ativos = [True, True, True, True, True, True, True]
+        self.sensores_ativos = [False, True, True, True, True, True, True]
         self.tato = {"N": 0, "S": 0, "E": 0, "W": 0}
         self.ordem_tato = ["N", "S", "E", "W"]
 
@@ -89,30 +89,47 @@ class Robo():
                 
                 return latent_space
 
-        class IdentityEncoder:
-            def __init__(self, ordem = None):
-                self.ordem = ordem 
+        class Min_max_encoder:
+            def __init__(self, ordem = None, interval_min_max = None):
+                self.ordem = ordem
+                self.interval_min_max = interval_min_max
 
             def __call__(self, x):
                 if isinstance(x, torch.Tensor):
+                    if self.interval_min_max is not None:
+                        min_val, max_val = self.interval_min_max
+                        x = 2 * (x - min_val) / (max_val - min_val) -1
                     return x.flatten() # Achata o tensor para garantir que seja unidimensional
                 if hasattr(x, 'x') and hasattr(x, 'y'):
+                    if self.interval_min_max is not None:
+                        min_val, max_val = self.interval_min_max
+                        x.x = 2 * (x.x - min_val) / (max_val - min_val) - 1
+                        x.y = 2 * (x.y - min_val) / (max_val - min_val) - 1
                     return torch.tensor([x.x, x.y])
                 if isinstance(x, dict):
                     inputs = []
                     for key in self.ordem:
+                        if self.interval_min_max is not None:
+                            min_val, max_val = self.interval_min_max
+                            x[key] = 2 * (x[key] - min_val) / (max_val - min_val) - 1
                         inputs.append(x[key])
                     return torch.tensor(inputs)
                 return torch.tensor([x]) # Converte para tensor, caso não seja nenhum dos tipos acima
+            
+            def decode(self, x):
+                if self.interval_min_max is not None:
+                    min_val, max_val = self.interval_min_max
+                    x = (x + 1) / 2 * (max_val - min_val) + min_val
+                return x
 
         self.encoders = {
             "visao": MobileEncoder(path_to_save_models=self.path_to_save_models),
-            "tato": IdentityEncoder(ordem=self.ordem_tato),
-            "acc": IdentityEncoder(),
-            "gyro": IdentityEncoder(),
-            "gps": IdentityEncoder(),
-            "compass": IdentityEncoder(),
-            "time": IdentityEncoder()
+            "tato": Min_max_encoder(ordem=self.ordem_tato, interval_min_max=(0, 10)), # Normaliza o tato para o intervalo [0, 1], considerando que o tato varia de 0 a 10
+            "acc": Min_max_encoder(interval_min_max=(-1, 1)),
+            "gyro": Min_max_encoder(interval_min_max=(-1, 1)),
+            "gps": Min_max_encoder(interval_min_max=(0, 1000)),
+            "compass": Min_max_encoder(interval_min_max=(0, 360)),
+            "time": Min_max_encoder(interval_min_max=(0, 1000))
         }
         
 
@@ -320,8 +337,9 @@ class Robo():
         self.phisics(dt)
 
     def sensor_gps(self):
-        self.brain.set_info_sensor(self.pos, "gps", encoder=self.encoders["gps"])
-        return self.pos
+        gps = rl.Vector2(self.pos.x, self.pos.y)
+        self.brain.set_info_sensor(gps, "gps", encoder=self.encoders["gps"])
+        return gps
 
     def sensor_accelerometer(self):
         # Simula o sensor de aceleração

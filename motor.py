@@ -28,6 +28,7 @@ class Motor():
         
         self.handler = Handler(self)
         self.prev_time = time.time()
+        self.paused = False # Pausa os updates
 
     def get_scaled_rect(self) -> rl.Rectangle: 
         # Retorna o retângulo perfeito para onde a textura deve ser esticada na janela atual,
@@ -63,7 +64,10 @@ class Motor():
         rl.end_drawing()
 
     def update(self): # Método chamado a cada frame
-        self.handler.update(self.dt)
+        if rl.is_key_pressed(rl.KEY_P):
+            self.paused = not self.paused
+        if not self.paused:
+            self.handler.update(self.dt)
 
     def run(self):
         while not rl.window_should_close():
