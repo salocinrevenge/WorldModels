@@ -18,18 +18,20 @@ class Curiosity_world():
         self.executar = executar
         assert not (self.registrar and self.executar), "Não é possível registrar e executar ao mesmo tempo"
         if self.registrar or self.executar:
-            self.controlador = Controlador(self, self.registrar, path_of_save="log.json")
+            self.controlador = Controlador(self, self.registrar, path_of_save="dataset/", to_save_imgs = True)
 
 
 
     def update(self, dt):
-        self.agente.update(dt)
-        self.ticks += 1
-        if self.ticks >= self.tempo_simulacao:
-            self.ticks = 0
-            self.agente = Robo(self, "cerebro/") # Reinicia o agente para testar o aprendizado ao longo do tempo
         if self.registrar or self.executar:
-            self.controlador.update()
+            self.agente.update(dt)
+            self.ticks += 1
+            if self.ticks >= self.tempo_simulacao:
+                self.ticks = 0
+                self.agente = Robo(self, "cerebro/") # Reinicia o agente para testar o aprendizado ao longo do tempo
+
+        if self.registrar or self.executar:
+            self.controlador.update(dt)
 
 
     def render_terreno(self):
@@ -63,19 +65,21 @@ class Curiosity_world():
         rl.draw_text(f"Posição: ({self.agente.pos.x:.2f}, {self.agente.pos.y:.2f})", 1010, 10, 20, rl.WHITE)
         rl.draw_text(f"Velocidade: ({self.agente.vel.x:.2f}, {self.agente.vel.y:.2f})", 1010, 40, 20, rl.WHITE)
         rl.draw_text(f"Aceleração: ({self.agente.acc.x:.2f}, {self.agente.acc.y:.2f})", 1010, 70, 20, rl.WHITE)
-        if self.agente.last_action is not None:
+        if self.agente.last_action is not None and self.agente.last_action[0] is not None:
             # Ao invés de texto, colocar duas barras verticais cinzas, uma para cada ação, com altura proporcional ao valor da ação, e um número indicando o valor da ação
             # Ela pode variar de -1 a 1, então a barra deve ser centralizada em 0, com altura máxima de 50 pixels. se 1, 25 para cima, se -1, 25 para baixo, com valores intermediario. Uma linha branca deve estar no fim da barra
-            rl.draw_text(f"Última ação: ({self.agente.last_action[0].item():.2f}, {self.agente.last_action[1].item():.2f})", 1010, 160, 20, rl.WHITE)
+            rl.draw_text(f"Última ação: ({self.agente.last_action[0]:.2f}, {self.agente.last_action[1]:.2f})", 1010, 160, 20, rl.WHITE)
             rl.draw_rectangle(1270, 155, 20, 50, rl.GRAY)
-            rl.draw_rectangle(1270, 180-max(int(self.agente.last_action[0].item() * 25), 0), 20, abs(int(self.agente.last_action[0].item() * 25)), rl.BLUE)
+            rl.draw_rectangle(1270, 180-max(int(self.agente.last_action[0] * 25), 0), 20, abs(int(self.agente.last_action[0] * 25)), rl.BLUE)
             rl.draw_rectangle(1300, 155, 20, 50, rl.GRAY)
-            rl.draw_rectangle(1300, 180-max(int(self.agente.last_action[1].item() * 25), 0), 20, abs(int(self.agente.last_action[1].item() * 25)), rl.BLUE)
+            rl.draw_rectangle(1300, 180-max(int(self.agente.last_action[1] * 25), 0), 20, abs(int(self.agente.last_action[1] * 25)), rl.BLUE)
 
     def render(self):
         self.render_terreno()
         self.agente.render()
         self.render_hud()
+        if not self.registrar and hasattr(self, "controlador"):
+            self.controlador.render()
 
     def test_robot_colision_with_terrain(self, raio, pos_alvo, caracter = "#"):
         # Testa se a posição alvo do robô colide com o terreno, retornando True se não colidir e False se colidir
@@ -132,3 +136,4 @@ class Curiosity_world():
                     return rl.Vector2(x * self.escala + self.escala // 2, y * self.escala + self.escala // 2)
             except IndexError:
                 raise IndexError(f"IndexError: x={x}, y={y}, len(terreno)={len(self.terreno)}, len(terreno[0])={len(self.terreno[0])}")
+        
