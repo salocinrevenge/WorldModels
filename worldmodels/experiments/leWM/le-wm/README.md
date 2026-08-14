@@ -31,20 +31,12 @@ This codebase builds on [stable-worldmodel](https://github.com/galilai-group/sta
 
 **Installation:**
 
-
-Precisei instalar o swig via apt e outros comandos abaixo diferindo do original:
-
 ```bash
-sudo apt update
-sudo apt install swig
-uv venv --python=3.10
-source .venv/bin/activate
+uv venv --python=3.10 && source .venv/bin/activate
+uv pip install -r requirements.txt
 
-uv pip install "pyarrow<16.0.0"
-uv pip install datasets==2.14.7 huggingface_hub==0.19.4 "transformers<4.36.0"
-
-uv pip install "stable-worldmodel[train,env,format]"
 ```
+
 
 ## Data
 
@@ -61,7 +53,7 @@ export STABLEWM_HOME=/path/to/your/storage
 
 No meu caso eu coloquei dentro de uma pasta seguindo o path: ".../le-wm/datasets" fiz esse comando (a pasta datasets é automática e não colocar ela causa erro pq ele vai procurar dentro dela):
 ```bash
-export STABLEWM_HOME=/home/nicolas/Programas/WorldModels/worldmodels/experiments/leWM/le-wm
+export STABLEWM_HOME=/home/nicolas.silva/WorldModels/worldmodels/experiments/leWM/le-wm
 ```
 
 Dataset names are specified without the `.h5` extension. For example, `config/train/data/pusht.yaml` references `pusht_expert_train`, which resolves to `$STABLEWM_HOME/pusht_expert_train.h5`.
@@ -84,6 +76,19 @@ To launch training:
 python train.py data=pusht
 ```
 
+Para treinar teste com apenas um tequinho do dataset:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python train.py +trainer.limit_train_batches=0.001 +trainer.limit_val_batches=0.001 +run_dir=./checkpoints
+```
+
+O arquivo para configurar o número de épocas está em config/train/lewm.yaml. 
+
+Uma geral do treinamento está em "/home/nicolas.silva/.cache/stable-pretraining/runs/20260813/084230/f4dabfa188fa/summary.json"
+
+Não há métricas de acurácia.
+
+
 Para rodar com a cpu apenas (vai usar bastante memória) usei o comando:
 
 ```bash
@@ -104,6 +109,13 @@ python eval.py --config-name=pusht.yaml policy=pusht/lewm
 
 # ✗ incorrect
 python eval.py --config-name=pusht.yaml policy=pusht/lewm_object.ckpt
+```
+
+usei:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python eval.py --config-name=pusht.yaml policy=lewm/weights_epoch_5.pt
+
 ```
 
 ## Pretrained Checkpoints

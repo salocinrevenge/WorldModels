@@ -1,6 +1,11 @@
 import os
-from functools import partial
 from pathlib import Path
+os.environ["STABLEWM_HOME"] = str(Path(__file__).resolve().parent) # Equivalent a executar toda vez export STABLEWM_HOME=/home/nicolas.silva/WorldModels/worldmodels/experiments/leWM/le-wm
+
+from functools import partial
+
+import warnings
+warnings.filterwarnings("ignore")
 
 import hydra
 import lightning as pl
@@ -12,6 +17,7 @@ from omegaconf import OmegaConf, open_dict
 
 from module import SIGReg
 from utils import get_column_normalizer, get_img_preprocessor, SaveCkptCallback
+
 
 
 def lejepa_forward(self, batch, stage, cfg):
@@ -49,7 +55,6 @@ def run(cfg):
     #########################
     ##       dataset       ##
     #########################
-
     dataset_cfg = OmegaConf.to_container(cfg.data.dataset, resolve=True)
     dataset_name = dataset_cfg.pop("name")
     cache_dir = os.environ.get("LOCAL_DATASET_DIR", None)

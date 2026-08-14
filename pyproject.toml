@@ -11,3 +11,8 @@ dependencies = [
     "torchaudio>=2.11.0",
     "torchvision>=0.27.0",
 ]
+
+[tool.uv.workspace]
+members = [
+    "worldmodels/experiments/leWM/le-wm",
+]

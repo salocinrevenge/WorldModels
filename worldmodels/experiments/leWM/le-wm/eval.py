@@ -2,6 +2,9 @@ import os
 
 os.environ["MUJOCO_GL"] = "egl"
 
+import warnings
+warnings.filterwarnings("ignore")
+
 import time
 from pathlib import Path
 
@@ -9,10 +12,11 @@ import hydra
 import numpy as np
 import stable_pretraining as spt
 import torch
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 from sklearn import preprocessing
 from torchvision.transforms import v2 as transforms
 import stable_worldmodel as swm
+from stable_worldmodel.data.formats.hdf5 import HDF5Dataset
 
 def img_transform(cfg):
     transform = transforms.Compose(
@@ -39,7 +43,7 @@ def get_episodes_length(dataset, episodes):
 
 def get_dataset(cfg, dataset_name):
     dataset_path = Path(cfg.cache_dir or swm.data.utils.get_cache_dir())
-    dataset = swm.data.HDF5Dataset(
+    dataset = HDF5Dataset(
         dataset_name,
         keys_to_cache=cfg.dataset.keys_to_cache,
         cache_dir=dataset_path,
@@ -91,7 +95,11 @@ def run(cfg: DictConfig):
         model.requires_grad_(False)
         model.interpolate_pos_encoding = True
         config = swm.PlanConfig(**cfg.plan_config)
-        solver = hydra.utils.instantiate(cfg.solver, model=model)
+        # solver = hydra.utils.instantiate(cfg.solver, cost=model)
+        with open_dict(cfg.solver):
+            cfg.solver.pop("model", None)
+
+        solver = hydra.utils.instantiate(cfg.solver, cost=model)
         policy = swm.policy.WorldModelPolicy(
             solver=solver, config=config, process=process, transform=transform
         )

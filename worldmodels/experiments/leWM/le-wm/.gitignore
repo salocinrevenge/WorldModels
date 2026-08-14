@@ -1,4 +1,6 @@
 __pycache__/
 checkpoints/
-datasets/
+datasets
 outputs/
+lewm/
+output*

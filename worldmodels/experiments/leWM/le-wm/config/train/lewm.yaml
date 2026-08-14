@@ -16,6 +16,7 @@ history_size: 3
 
 trainer:
   max_epochs: 100
+  # max_steps: 100
   devices: auto
   accelerator: gpu
   precision: bf16
