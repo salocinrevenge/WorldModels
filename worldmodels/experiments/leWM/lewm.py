@@ -179,12 +179,16 @@ class Embedder(nn.Module):
 
     def forward(self, x):
         """
-        x: (B, T, D)
+        x: (B, T, D) ou (B, D, T)
         """
         x = x.float()
-        x = x.permute(0, 2, 1)
-        x = self.patch_embed(x)
-        x = x.permute(0, 2, 1)
+
+        # Só permuta para (B, D, T) se o formato de entrada for (B, T, D)
+        if x.ndim == 3 and x.shape[-1] == self.patch_embed.in_channels:
+            x = x.permute(0, 2, 1)
+
+        x = self.patch_embed(x)  # Entrada esperada: (B, in_channels, T) -> Saída: (B, out_channels, T)
+        x = x.permute(0, 2, 1)   # Volta para (B, T, out_channels) para a camada Linear
         x = self.embed(x)
         return x
 
@@ -309,6 +313,10 @@ class LeWM_backbone(nn.Module):
 
         act_emb = None
         if action is not None:
+            # Ensure shape is (Batch, Channels=2, Length) instead of (Batch, Length=1, Channels=2)
+            if action.ndim == 3 and action.shape[1] != self.action_encoder.patch_embed.in_channels:
+                action = action.transpose(1, 2)
+
             act_emb = self.action_encoder(action)
 
         return emb, act_emb
