@@ -440,7 +440,7 @@ def evaluate_simulation_wm(
         eval_budget=cfg["eval_budget"],
         episodes_idx=eval_episodes.tolist(),
         callables=cfg["callables"],
-        video=None,
+        video="./videos_pusht",
     )
 
     return metrics
