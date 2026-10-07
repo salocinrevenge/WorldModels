@@ -200,27 +200,27 @@ class WorldModel(L.LightningModule):
         return cost
 
     def get_cost(self, info_dict: dict, action_candidates: torch.Tensor):
-        device = next(self.parameters()).device
+        device = next(self.parameters()).device # Descobre o device
 
-        for k in list(info_dict.keys()):
+        for k in list(info_dict.keys()): # Manda td pra o device
             if torch.is_tensor(info_dict[k]):
                 info_dict[k] = info_dict[k].to(device)
 
-        goal = {k: v[:, 0] if (torch.is_tensor(v) and v.ndim > 1) else v for k, v in info_dict.items()}
+        goal = {k: v[:, 0] if (torch.is_tensor(v) and v.ndim > 1) else v for k, v in info_dict.items()} # Obtem o primeiro frame, sendo ele o objetivo
 
-        if "pixels" not in goal:
+        if "pixels" not in goal: # Padroniza a informação: goal["pixels"] contém os pixels do objetivo
             if "goal" in goal:
                 goal["pixels"] = goal.pop("goal")
             elif "goal_pixels" in goal:
                 goal["pixels"] = goal.pop("goal_pixels")
 
-        goal.pop("action", None)
+        goal.pop("action", None) # Remove a coluna de ações, se existir. Objetivo não tem ação.
 
-        goal_out = self.encode(goal)
-        info_dict["goal_emb"] = goal_out["emb"]
+        goal_out = self.encode(goal) # Codifica o objetivo para obter o embedding do objetivo
+        info_dict["goal_emb"] = goal_out["emb"] # Adiciona o embedding do objetivo ao dicionário de informações
 
-        info_dict = self.rollout(info_dict, action_candidates)
-        return self.criterion(info_dict)
+        info_dict = self.rollout(info_dict, action_candidates) # Executa a simulação do modelo de mundo para obter as predições futuras para as ações candidatas
+        return self.criterion(info_dict) # Compara o estado latente previsto com o estado latente do objetivo e retorna o custo associado
 
     # Fim dos métodos para CEMSolver
 
@@ -434,14 +434,55 @@ def evaluate_simulation_wm(
 
     # 8. Avaliação
     metrics = world.evaluate(
-        dataset=dataset,
+        dataset=dataset, # Source dataset for dataset-driven eval
         start_steps=eval_start_idx.tolist(),
-        goal_offset=cfg["goal_offset_steps"],
-        eval_budget=cfg["eval_budget"],
-        episodes_idx=eval_episodes.tolist(),
-        callables=cfg["callables"],
-        video="./videos_pusht",
-    )
+        goal_offset=cfg["goal_offset_steps"], # = 25
+        eval_budget=cfg["eval_budget"], # = 50
+        episodes_idx=eval_episodes.tolist(), # Dataset episode indices, one per env
+        callables=cfg["callables"], # = [ {"method": "_set_state", "args": {"state": {"value": "state"}}}, {"method": "_set_goal_state", "args": {"goal_state": {"value": "goal_state"}}},],
+        video="./videos_pusht", # Directory to write one mp4 per episode/env
+    )# reset mode = 'wait' (freeze terminated envs and stop when all are done)
+    """Run the attached policy and return aggregated metrics.
+
+        Two modes of operation:
+
+        * **Episodic (default)**: set ``episodes`` to the number of
+          episodes to roll out. Terminated envs are auto-reset until the
+          target count is reached.
+
+        * **Dataset-driven**: pass ``dataset`` with ``episodes_idx`` /
+          ``start_steps`` / ``goal_offset`` / ``eval_budget``. Each env
+          is seeded from one dataset episode, starts at
+          ``start_steps[i]`` and targets the state at
+          ``start_steps[i] + goal_offset``. Run length is capped at
+          ``eval_budget`` steps. Requires ``num_envs == len(episodes_idx)``.
+
+        Args:
+            episodes: Total episodes to roll out (episodic mode).
+            seed: Base seed. Per-env seeds are derived by offsetting it.
+            options: Reset options forwarded to ``envs.reset``.
+            video: Directory to write one mp4 per episode/env (optional).
+            reset_mode: ``'auto'`` (reset terminated envs) or ``'wait'``
+                (freeze terminated envs and stop when all are done).
+                Defaults to ``'auto'`` for episodic eval and ``'wait'``
+                for dataset eval.
+            dataset: Source dataset for dataset-driven eval.
+            episodes_idx: Dataset episode indices, one per env.
+            start_steps: Starting step within each dataset episode.
+            goal_offset: Offset from each start step that defines the goal.
+            eval_budget: Max env steps per episode in dataset mode.
+            callables: Per-env setup calls applied on the unwrapped env
+                after reset. Each spec is
+                ``{'method': name, 'args': {arg_name: {'value': ...,
+                'in_dataset': bool}}}``; if ``in_dataset`` is True, the
+                ``value`` names a key in the sliced dataset state and the
+                per-env value is deep-copied in.
+
+        Returns:
+            A dict with ``'success_rate'`` (percent), ``'episode_successes'``
+            (per-episode bool/uint array), and ``'seeds'`` used for reset.
+        """
+
 
     return metrics
 
