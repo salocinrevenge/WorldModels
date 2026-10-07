@@ -35,114 +35,32 @@ class WorldModel(L.LightningModule):
         if load_weights:
             self.load_state_dict(torch.load(load_weights))
 
-    # Para ser usado como modelo em CEMSolver:
-    def _get_expected_action_channels(self) -> int:
-        """Retorna o número de canais de ação esperados pelo Embedder (padrão: 2 para PushT)."""
-        try:
-            if hasattr(self.backbone, "action_encoder"):
-                ae = self.backbone.action_encoder
-                if hasattr(ae, "patch_embed") and hasattr(ae.patch_embed, "in_channels"):
-                    return ae.patch_embed.in_channels
-        except Exception:
-            pass
-        return 2
-
-    def _format_action(self, action: torch.Tensor) -> torch.Tensor:
-        if action is None or not torch.is_tensor(action):
-            return None
-
-        # Get target in_channels expected by the Conv1d patch embedder (typically 2)
-        target_dim = self._get_expected_action_channels()
-
-        # Flatten CEM batch and sample dimensions if 4D: (B, S, T, A) -> (B*S, T, A)
-        if action.ndim == 4:
-            b, s, t, a = action.shape
-            action = action.reshape(b * s, t, a)
-
-        if action.ndim == 3:
-            # Check if already in (Batch, Channels, Length) format: (300, 2, T)
-            if action.shape[1] == target_dim:
-                return action
-            
-            # If in (Batch, Length, Channels) format: (300, T, 2) -> transpose to (300, 2, T)
-            elif action.shape[2] == target_dim:
-                return action.transpose(1, 2)
-            
-            # If action dimension > target_dim (e.g., shape is 300, 10, 5), slice & transpose to (300, 2, 10)
-            elif action.shape[2] > target_dim:
-                return action[:, :, :target_dim].transpose(1, 2)
-            elif action.shape[1] > target_dim:
-                return action[:, :target_dim, :]
-
-        elif action.ndim == 2:
-            # (Batch, Action_Dim) -> (Batch, Action_Dim, 1)
-            if action.shape[1] == target_dim:
-                return action.unsqueeze(-1)
-            else:
-                return action[:, :target_dim].unsqueeze(-1)
-
-        return action
-
-    def encode(self, info: dict):
-        # 1. Localiza o tensor de imagem no dicionário
-        pixels = None
+    def _extract_pixels(self, info: dict) -> torch.Tensor:
+        """Função utilitária interna apenas para localizar o tensor de imagem no dicionário."""
         for key in ["pixels", "goal", "goal_pixels"]:
             if key in info and torch.is_tensor(info[key]):
-                pixels = info[key]
-                break
-
-        if pixels is None:
-            raise KeyError(
-                f"Nenhum tensor de imagem ('pixels', 'goal', 'goal_pixels') foi encontrado. Chaves disponíveis: {list(info.keys())}"
-            )
-
-        orig_shape = pixels.shape
-        orig_ndim = pixels.ndim
-
-        # 2. Normaliza as dimensões de pixels para o formato 5D esperado pelo LeWM: (B_eff, T, C, H, W)
-        if orig_ndim == 3:  # (C, H, W)
-            pixels_5d = pixels.unsqueeze(0).unsqueeze(0)
-            leading_shape = (1, 1)
-        elif orig_ndim == 4:  # (B, C, H, W)
-            pixels_5d = pixels.unsqueeze(1)
-            leading_shape = (orig_shape[0], 1)
-        elif orig_ndim == 5:  # (B, T, C, H, W)
-            pixels_5d = pixels
-            leading_shape = (orig_shape[0], orig_shape[1])
-        else:  # 6D+, ex: (B, S, T, C, H, W)
-            c, h, w = orig_shape[-3:]
-            t_dim = orig_shape[-4]
-            b_eff = 1
-            for d_size in orig_shape[:-4]:
-                b_eff *= d_size
-            pixels_5d = pixels.reshape(b_eff, t_dim, c, h, w)
-            leading_shape = orig_shape[:-3]
-
-        # 3. Ajusta o tensor de ação se presente
-        action = info.get("action", None)
-        formatted_action = self._format_action(action) if action is not None else None
-
-        # 4. Passa os tensores formatados para o backbone
-        emb, act_emb = self.backbone.encode(pixels_5d, action=formatted_action)
-
-        # 5. Restaura o formato original caso venha do CEM (ex: B, S, T, D)
-        if orig_ndim > 5:
-            d_dim = emb.shape[-1]
-            emb = emb.reshape(*leading_shape, d_dim)
-
-        return {"emb": emb, "act_emb": act_emb}
+                return info[key]
+        raise KeyError(
+            f"Nenhum tensor de imagem ('pixels', 'goal', 'goal_pixels') foi encontrado no dicionário. "
+            f"Chaves disponíveis: {list(info.keys())}"
+        )
 
     def rollout(self, info_dict: dict, action_candidates: torch.Tensor, history_size: int = 3):
         if hasattr(self.backbone, "rollout"):
             return self.backbone.rollout(info_dict, action_candidates, history_size=history_size)
 
+        # Se o embedding do estado atual ainda não existe, extrai os pixels e chama o backbone.encode diretamente
         if "emb" not in info_dict:
-            encoded = self.encode(info_dict)
-            info_dict["emb"] = encoded["emb"]
+            pixels = self._extract_pixels(info_dict)
+            action = info_dict.get("action", None)
+            
+            # Chamada direta ao backbone com parâmetros explícitos
+            emb, _ = self.backbone.encode(pixels, action=action)
+            info_dict["emb"] = emb
 
         emb = info_dict["emb"]
 
-        # 1. Determina dinamicamente o histórico de contexto disponível
+        # 1. Determina dinamicamente o histórico de contexto
         if emb.ndim == 4:  # (B, S, T_ctx, D)
             b, s, t_ctx, d = emb.shape
             curr_history = min(t_ctx, history_size)
@@ -156,8 +74,8 @@ class WorldModel(L.LightningModule):
         else:
             raise ValueError(f"Dimensão inesperada para o embedding: {emb.ndim}")
 
-        # 2. Formata ações candidatas do CEM para (B_eff, T_act, Action_Dim)
-        formatted_actions = self._format_action(action_candidates)
+        # 2. Formata ações candidatas do CEM
+        formatted_actions = self.backbone._format_action(action_candidates)
 
         if action_candidates.ndim == 4:
             b_act, s_act = action_candidates.shape[:2]
@@ -166,11 +84,11 @@ class WorldModel(L.LightningModule):
         else:
             b_act, s_act = b_act_eff, 1
 
-        # 3. Predição no espaço latente usando a sequência completa de ações do planejamento
+        # 3. Predição no espaço latente usando o predictor
         ctx_act_emb = self.backbone.action_encoder(formatted_actions)
         pred_raw = self.backbone.predictor(ctx_emb, ctx_act_emb)
 
-        # 4. Projeta e restaura o formato original das predições
+        # 4. Projeta e restaura o formato original
         t_pred = pred_raw.shape[1]
         pred_emb = self.backbone.pred_proj(rearrange(pred_raw, "b t d -> (b t) d"))
 
@@ -182,6 +100,27 @@ class WorldModel(L.LightningModule):
 
         info_dict["predicted_emb"] = pred_emb
         return info_dict
+
+    def get_cost(self, info_dict: dict, action_candidates: torch.Tensor):
+        device = next(self.parameters()).device
+
+        for k in list(info_dict.keys()):
+            if torch.is_tensor(info_dict[k]):
+                info_dict[k] = info_dict[k].to(device)
+
+        # Isolamento do dicionário do objetivo (Goal)
+        goal = {k: v[:, 0] if (torch.is_tensor(v) and v.ndim > 1) else v for k, v in info_dict.items()}
+
+        # 1. Extração direta do tensor de pixels do objetivo
+        goal_pixels = self._extract_pixels(goal)
+
+        # 2. Chamada direta ao backbone.encode com parâmetros explícitos
+        goal_emb, _ = self.backbone.encode(goal_pixels)
+        info_dict["goal_emb"] = goal_emb
+
+        # 3. Simulação e cálculo de custo
+        info_dict = self.rollout(info_dict, action_candidates)
+        return self.criterion(info_dict)
 
     def criterion(self, info_dict: dict):
         pred_emb = info_dict["predicted_emb"]
@@ -199,55 +138,7 @@ class WorldModel(L.LightningModule):
 
         return cost
 
-    def get_cost(self, info_dict: dict, action_candidates: torch.Tensor):
-        device = next(self.parameters()).device # Descobre o device
-
-        for k in list(info_dict.keys()): # Manda td pra o device
-            if torch.is_tensor(info_dict[k]):
-                info_dict[k] = info_dict[k].to(device)
-
-        goal = {k: v[:, 0] if (torch.is_tensor(v) and v.ndim > 1) else v for k, v in info_dict.items()} # Obtem o primeiro frame, sendo ele o objetivo
-
-        if "pixels" not in goal: # Padroniza a informação: goal["pixels"] contém os pixels do objetivo
-            if "goal" in goal:
-                goal["pixels"] = goal.pop("goal")
-            elif "goal_pixels" in goal:
-                goal["pixels"] = goal.pop("goal_pixels")
-
-        goal.pop("action", None) # Remove a coluna de ações, se existir. Objetivo não tem ação.
-
-        goal_out = self.encode(goal) # Codifica o objetivo para obter o embedding do objetivo
-        info_dict["goal_emb"] = goal_out["emb"] # Adiciona o embedding do objetivo ao dicionário de informações
-
-        info_dict = self.rollout(info_dict, action_candidates) # Executa a simulação do modelo de mundo para obter as predições futuras para as ações candidatas
-        return self.criterion(info_dict) # Compara o estado latente previsto com o estado latente do objetivo e retorna o custo associado
-
     # Fim dos métodos para CEMSolver
-
-    def format_action(action: torch.Tensor, target_channels: int = 2) -> torch.Tensor:
-        if action is None:
-            return None
-
-        # Handle 2D: (B, A) -> (B, A, 1)
-        if action.ndim == 2:
-            return action.unsqueeze(-1) if action.shape[1] == target_channels else action.unsqueeze(1)
-
-        # Handle 3D: (B, T, A) -> (B, A, T)
-        elif action.ndim == 3:
-            if action.shape[1] != target_channels and action.shape[2] == target_channels:
-                return action.transpose(1, 2)  # Converts (300, 1, 2) -> (300, 2, 1)
-            return action
-
-        # Handle 4D (CEM candidates): (B, S, T, A) -> (B*S, A, T)
-        elif action.ndim == 4:
-            b, s, t, a = action.shape
-            action = action.reshape(b * s, t, a)
-            if action.shape[2] == target_channels:
-                return action.transpose(1, 2)
-            return action
-
-        return action
-
 
     def set_use_decoder(self, use_decoder):
         self.using_decoder = use_decoder

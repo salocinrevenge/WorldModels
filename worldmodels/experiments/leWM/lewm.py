@@ -296,13 +296,65 @@ class LeWM_backbone(nn.Module):
         if pred_proj == None:
             self.pred_proj = MLP(input_dim=256, hidden_dim=512, output_dim=256, norm_fn=torch.nn.BatchNorm1d)
 
-    def encode(self, pixels, action=None):
-        """Codifica imagens e ações em embeddings latentes."""
-        b, t = pixels.shape[:2]
-        pixels_flat = rearrange(pixels, "b t ... -> (b t) ...")
+    def _format_action(self, action: torch.Tensor) -> torch.Tensor:
+        """Ajusta o formato do tensor de ação para o Embedder (Conv1d)."""
+        if action is None or not torch.is_tensor(action):
+            return None
+
+        target_dim = self.action_encoder.patch_embed.in_channels
+
+        if action.ndim == 4:
+            b, s, t, a = action.shape
+            action = action.reshape(b * s, t, a)
+
+        if action.ndim == 3:
+            if action.shape[1] == target_dim:
+                return action
+            elif action.shape[2] == target_dim:
+                return action.transpose(1, 2)
+            elif action.shape[2] > target_dim:
+                return action[:, :, :target_dim].transpose(1, 2)
+            elif action.shape[1] > target_dim:
+                return action[:, :target_dim, :]
+        elif action.ndim == 2:
+            if action.shape[1] == target_dim:
+                return action.unsqueeze(-1)
+            else:
+                return action[:, :target_dim].unsqueeze(-1)
+
+        return action
+
+    def encode(self, pixels: torch.Tensor, action: torch.Tensor = None):
+        """
+        Codifica tensores diretos de imagens e ações em embeddings latentes.
+        """
+        orig_shape = pixels.shape
+        orig_ndim = pixels.ndim
+
+        # 1. Ajusta dimensões de pixels para o formato 5D esperado: (B_eff, T, C, H, W)
+        if orig_ndim == 3:  # (C, H, W)
+            pixels_5d = pixels.unsqueeze(0).unsqueeze(0)
+            leading_shape = (1, 1)
+        elif orig_ndim == 4:  # (B, C, H, W)
+            pixels_5d = pixels.unsqueeze(1)
+            leading_shape = (orig_shape[0], 1)
+        elif orig_ndim == 5:  # (B, T, C, H, W)
+            pixels_5d = pixels
+            leading_shape = (orig_shape[0], orig_shape[1])
+        else:  # 6D+, ex: (B, S, T, C, H, W)
+            c, h, w = orig_shape[-3:]
+            t_dim = orig_shape[-4]
+            b_eff = 1
+            for d_size in orig_shape[:-4]:
+                b_eff *= d_size
+            pixels_5d = pixels.reshape(b_eff, t_dim, c, h, w)
+            leading_shape = orig_shape[:-3]
+
+        # 2. Processamento de Imagens pelo ViT / Encoder
+        b, t = pixels_5d.shape[:2]
+        pixels_flat = rearrange(pixels_5d, "b t ... -> (b t) ...")
         
         output = self.encoder(pixels_flat)
-        # Extrai o token CLS se for um modelo Vision Transformer (ViT)
         if hasattr(output, "last_hidden_state"):
             pixels_emb = output.last_hidden_state[:, 0]
         else:
@@ -311,13 +363,16 @@ class LeWM_backbone(nn.Module):
         emb = self.projector(pixels_emb)
         emb = rearrange(emb, "(b t) d -> b t d", b=b, t=t)
 
+        # Restaura o formato original se veio do CEM
+        if orig_ndim > 5:
+            d_dim = emb.shape[-1]
+            emb = emb.reshape(*leading_shape, d_dim)
+
+        # 3. Processamento de Ações
         act_emb = None
         if action is not None:
-            # Ensure shape is (Batch, Channels=2, Length) instead of (Batch, Length=1, Channels=2)
-            if action.ndim == 3 and action.shape[1] != self.action_encoder.patch_embed.in_channels:
-                action = action.transpose(1, 2)
-
-            act_emb = self.action_encoder(action)
+            formatted_action = self._format_action(action)
+            act_emb = self.action_encoder(formatted_action)
 
         return emb, act_emb
 
